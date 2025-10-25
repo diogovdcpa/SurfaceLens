@@ -366,10 +366,9 @@ def create_bar_chart(
 def create_summary_chart(hosts: List[HostReport], chart_paths: List[str]) -> str | None:
     total_hosts = len(hosts)
     total_ports = sum(len(set(host.open_ports)) for host in hosts)
-    total_services = sum(len(host.services) for host in hosts)
     total_vulns = sum(len(host.vulns) for host in hosts)
-    labels = ["Hosts", "Portas", "Serviços", "CVEs"]
-    values = [total_hosts, total_ports, total_services, total_vulns]
+    labels = ["Hosts", "Portas", "CVEs"]
+    values = [total_hosts, total_ports, total_vulns]
     return create_bar_chart(labels, values, "Resumo do escopo", chart_paths)
 
 
