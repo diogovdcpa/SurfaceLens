@@ -4,17 +4,24 @@ import ipaddress
 import os
 import re
 import socket
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
 import requests
 from fpdf import FPDF, XPos, YPos
 
 API_BASE_URL = "https://api.shodan.io"
-DEFAULT_TIMEOUT = 20
+DEFAULT_TIMEOUT = 60
 MAX_TARGET_IPS = 1024
 PAUSE_BETWEEN_REQUESTS = 1.0
 
@@ -61,20 +68,21 @@ class ReportWarning:
 
 
 class ReportPDF(FPDF):
-    PAGE_BG = (34, 9, 12)
-    HEADER_BG = (89, 15, 22)
-    SECTION_BG = (122, 26, 35)
-    CARD_BG = (61, 20, 27)
-    CHIP_BG = (82, 28, 35)
-    ACCENT = (255, 150, 138)
-    TEXT_PRIMARY = (249, 245, 245)
-    TEXT_MUTED = (222, 209, 209)
+    PAGE_BG = (247, 249, 252)
+    HEADER_BG = (21, 35, 55)
+    SECTION_BG = (227, 233, 242)
+    CARD_BG = (255, 255, 255)
+    CHIP_BG = (236, 240, 247)
+    ACCENT = (28, 99, 189)
+    TEXT_PRIMARY = (24, 32, 45)
+    TEXT_MUTED = (110, 118, 138)
+    BORDER_COLOR = (210, 216, 228)
     SEVERITY_COLORS = {
-        "CRITICAL": (219, 68, 55),
-        "HIGH": (244, 143, 0),
-        "MEDIUM": (244, 180, 0),
-        "LOW": (66, 133, 244),
-        "INFO": (156, 39, 176),
+        "CRITICAL": (179, 38, 30),
+        "HIGH": (227, 119, 15),
+        "MEDIUM": (210, 155, 0),
+        "LOW": (25, 118, 210),
+        "INFO": (85, 139, 47),
     }
 
     def __init__(self) -> None:
@@ -97,7 +105,9 @@ class ReportPDF(FPDF):
         self.rect(0, 0, self.w, self.h, "F")
         self.set_fill_color(*self.HEADER_BG)
         self.rect(0, 0, self.w, self.header_height, "F")
-        self.set_text_color(*self.TEXT_PRIMARY)
+        self.set_draw_color(*self.BORDER_COLOR)
+        self.line(self.l_margin, self.header_height, self.w - self.r_margin, self.header_height)
+        self.set_text_color(255, 255, 255)
         self.set_xy(self.l_margin, 8)
         logo_width = 20
         if self.logo_path:
@@ -313,6 +323,102 @@ def summarize_total_vulns(vulns: List[VulnerabilityDetail]) -> str:
     return f"{total} vulnerabilidade{'s' if total != 1 else ''}"
 
 
+def collect_all_vulns(host: HostReport) -> List[VulnerabilityDetail]:
+    aggregated: Dict[str, VulnerabilityDetail] = {}
+    for vuln in host.vulns:
+        aggregated[vuln.cve] = vuln
+    for service in host.services:
+        for vuln in service.vulns:
+            aggregated.setdefault(vuln.cve, vuln)
+    return list(aggregated.values())
+
+
+def rgb_to_hex(color: tuple[int, int, int]) -> str:
+    return "#%02x%02x%02x" % color
+
+
+def create_bar_chart(
+    labels: List[str],
+    values: List[int],
+    title: str,
+    chart_paths: List[str],
+) -> str | None:
+    if not values or sum(values) == 0:
+        return None
+    fig, ax = plt.subplots(figsize=(2.8, 3.2))
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#f5f7fb")
+    colors = ["#1c63bd", "#4b89dc", "#7aa7e8", "#a6c2f1"]
+    bars = ax.bar(labels, values, color=colors[: len(labels)], edgecolor="#d0d8e6")
+    ax.set_title(title, color="#1c2031", fontsize=10)
+    ax.tick_params(colors="#1c2031", labelsize=8)
+    for spine in ax.spines.values():
+        spine.set_color("#cfd6e3")
+    ax.bar_label(bars, padding=2, color="#1c2031", fontsize=8)
+    fig.tight_layout()
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    fig.savefig(tmp.name, dpi=220, bbox_inches="tight", transparent=True)
+    plt.close(fig)
+    chart_paths.append(tmp.name)
+    return tmp.name
+
+
+def create_summary_chart(hosts: List[HostReport], chart_paths: List[str]) -> str | None:
+    total_hosts = len(hosts)
+    total_ports = sum(len(set(host.open_ports)) for host in hosts)
+    total_services = sum(len(host.services) for host in hosts)
+    total_vulns = sum(len(host.vulns) for host in hosts)
+    labels = ["Hosts", "Portas", "Serviços", "CVEs"]
+    values = [total_hosts, total_ports, total_services, total_vulns]
+    return create_bar_chart(labels, values, "Resumo do escopo", chart_paths)
+
+
+def create_host_chart(host: HostReport, chart_paths: List[str]) -> str | None:
+    labels = ["Portas", "Serviços", "CVEs"]
+    values = [len(set(host.open_ports)), len(host.services), len(host.vulns)]
+    return create_bar_chart(labels, values, f"Host {host.ip}", chart_paths)
+
+
+def create_vuln_severity_chart(host: HostReport, chart_paths: List[str]) -> str | None:
+    severity_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+    severity_counts: Dict[str, int] = {key: 0 for key in severity_order}
+    for vuln in host.vulns:
+        severity = severity_from_cvss(cvss_score(vuln.cvss))
+        severity_counts[severity] += 1
+    labels = ["Crítico", "Alto", "Médio", "Baixo", "Info"]
+    values = [severity_counts[key] for key in severity_order]
+    colors = [rgb_to_hex(ReportPDF.SEVERITY_COLORS[key]) for key in severity_order]
+    if not any(values):
+        return None
+    fig, ax = plt.subplots(figsize=(2.6, 2.6))
+    fig.patch.set_facecolor("#ffffff")
+    wedges, texts = ax.pie(values, colors=colors, startangle=90, wedgeprops={"linewidth": 0.5, "edgecolor": "#ffffff"})
+    ax.axis('equal')
+    for i, w in enumerate(wedges):
+        if values[i] > 0:
+            angle = (w.theta2 + w.theta1) / 2.0
+            x = 0.7 * np.cos(np.deg2rad(angle))
+            y = 0.7 * np.sin(np.deg2rad(angle))
+            ax.text(
+                x,
+                y,
+                str(values[i]),
+                ha="center",
+                va="center",
+                color="#ffffff",
+                fontsize=8,
+                weight="bold",
+            )
+    ax.legend(wedges, labels, loc="lower center", bbox_to_anchor=(0.5, -0.2), ncol=3, fontsize=7)
+    ax.set_title("Severidade de CVEs", fontsize=9, color="#1c2031")
+    fig.tight_layout()
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    fig.savefig(tmp.name, dpi=220, bbox_inches="tight", transparent=True)
+    plt.close(fig)
+    chart_paths.append(tmp.name)
+    return tmp.name
+
+
 def fetch_host_report(ip: str, api_key: str, timeout: int) -> HostReport:
     payload = shodan_request(f"/shodan/host/{ip}", api_key, timeout)
     services: List[ServiceInfo] = []
@@ -336,7 +442,7 @@ def fetch_host_report(ip: str, api_key: str, timeout: int) -> HostReport:
     ]
     location = ", ".join(part for part in location_parts if part)
 
-    return HostReport(
+    host_report = HostReport(
         ip=payload.get("ip_str", ip),
         hostnames=payload.get("hostnames", []) or [],
         org=payload.get("org"),
@@ -348,6 +454,8 @@ def fetch_host_report(ip: str, api_key: str, timeout: int) -> HostReport:
         vulns=extract_vulns(payload.get("vulns")),
         services=services,
     )
+
+    return host_report
 
 
 def slugify(value: str) -> str:
@@ -370,6 +478,7 @@ def list_to_text(values: Sequence[str]) -> str | None:
 def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
     logo_path = Path(__file__).with_name("static").joinpath("surfacelens-logo.svg")
     pdf = ReportPDF(logo_path=str(logo_path) if logo_path.exists() else None)
+    chart_paths: List[str] = []
     pdf.add_page()
     content_width = pdf.w - pdf.l_margin - pdf.r_margin
     pdf.set_text_color(*pdf.TEXT_PRIMARY)
@@ -429,23 +538,30 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
 
         if service.vulns:
             for year, severity_map in group_vulns_by_year_and_severity(service.vulns):
-                pdf.set_fill_color(*pdf.CARD_BG)
+                pdf.ln(2)
+                pdf.set_fill_color(*pdf.SECTION_BG)
                 pdf.set_text_color(*pdf.TEXT_PRIMARY)
                 pdf.set_font("Helvetica", "B", 9)
                 pdf.set_x(indent_x)
-                pdf.multi_cell(body_width, 5, f"Vulnerabilidades {year}", fill=True)
+                pdf.multi_cell(body_width, 6, f"Vulnerabilidades {year}", fill=True)
+                pdf.ln(1)
                 for severity, entries in severity_map.items():
                     color = pdf.SEVERITY_COLORS.get(severity, pdf.TEXT_MUTED)
-                    pdf.set_fill_color(*pdf.CHIP_BG)
-                    pdf.set_text_color(*color)
+                    pdf.set_fill_color(*color)
+                    pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Helvetica", "B", 9)
                     pdf.set_x(indent_x)
-                    pdf.multi_cell(body_width, 5, severity.title(), fill=True)
-                    pdf.set_text_color(*pdf.TEXT_MUTED)
+                    pdf.multi_cell(body_width, 5.5, severity.title(), fill=True)
+                    pdf.set_text_color(*pdf.TEXT_PRIMARY)
                     pdf.set_font("Helvetica", size=9)
-                    for vuln in entries:
+                    for idx_entry, vuln in enumerate(entries):
+                        shade = pdf.CHIP_BG if idx_entry % 2 == 0 else (248, 250, 253)
+                        pdf.set_fill_color(*shade)
                         pdf.set_x(indent_x)
-                        pdf.multi_cell(body_width, 5, format_vuln_summary(vuln), fill=True)
+                        pdf.multi_cell(body_width, 6, format_vuln_summary(vuln), fill=True)
+                        pdf.set_y(pdf.get_y() + 1)
+                    pdf.ln(2)
+                pdf.ln(4)
         pdf.ln(4)
 
     def render_host(host: HostReport, idx: int) -> None:
@@ -460,12 +576,24 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
         ]
         if host.open_ports:
             details.append(("Portas abertas", ", ".join(str(p) for p in host.open_ports), None))
-        if host.vulns:
-            details.append(("Vulnerabilidades", summarize_total_vulns(host.vulns), None))
+        all_vulns = collect_all_vulns(host)
+        if all_vulns:
+            details.append(("Vulnerabilidades", summarize_total_vulns(all_vulns), None))
         if not any(value for _, value, _ in details):
             details.append(("Informações", "Nenhum metadado divulgado pelo Shodan.", None))
 
         write_info_block(details)
+        host_chart = create_host_chart(host, chart_paths)
+        severity_chart = create_vuln_severity_chart(host, chart_paths)
+        chart_width = (content_width - 6) / 2
+        chart_height = 55
+        chart_y = pdf.get_y()
+        if host_chart:
+            pdf.image(host_chart, x=pdf.l_margin, y=chart_y, w=chart_width, h=chart_height)
+        if severity_chart:
+            pdf.image(severity_chart, x=pdf.l_margin + chart_width + 6, y=chart_y, w=chart_width, h=chart_height)
+        if host_chart or severity_chart:
+            pdf.set_y(chart_y + chart_height + 6)
         pdf.section_title("Serviços expostos", content_width)
         if not host.services:
             pdf.set_fill_color(*pdf.CARD_BG)
@@ -492,14 +620,33 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
         ("Hosts encontrados", str(len(hosts)), None),
     ]
     write_info_block(summary_items, multiline=False)
+    summary_chart = create_summary_chart(hosts, chart_paths)
+    if summary_chart:
+        chart_width = content_width / 2
+        chart_x = pdf.l_margin + (content_width - chart_width) / 2
+        pdf.image(summary_chart, x=chart_x, w=chart_width, h=50)
+        pdf.ln(10)
+
+    pdf.add_page()
 
     for idx, host in enumerate(hosts, start=1):
+        if idx > 1:
+            pdf.add_page()
         render_host(host, idx)
 
     pdf_buffer = pdf.output(dest="S")
     if isinstance(pdf_buffer, str):
-        return pdf_buffer.encode("latin-1")
-    return bytes(pdf_buffer)
+        output_bytes = pdf_buffer.encode("latin-1")
+    else:
+        output_bytes = bytes(pdf_buffer)
+
+    for path in chart_paths:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    return output_bytes
 
 
 def collect_host_reports(
