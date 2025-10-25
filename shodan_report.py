@@ -4,6 +4,7 @@ import ipaddress
 import os
 import re
 import socket
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,7 @@ from fpdf import FPDF, XPos, YPos
 API_BASE_URL = "https://api.shodan.io"
 DEFAULT_TIMEOUT = 20
 MAX_TARGET_IPS = 1024
+PAUSE_BETWEEN_REQUESTS = 1.0
 
 
 @dataclass
@@ -304,15 +306,11 @@ def group_vulns_by_year_and_severity(
     return result
 
 
-def summarize_vulns_by_year(vulns: List[VulnerabilityDetail]) -> str:
+def summarize_total_vulns(vulns: List[VulnerabilityDetail]) -> str:
     if not vulns:
-        return ""
-    pieces: List[str] = []
-    for year, severity_map in group_vulns_by_year_and_severity(vulns):
-        counts = [f"{sev.title()}: {len(items)}" for sev, items in severity_map.items()]
-        if counts:
-            pieces.append(f"{year} ({', '.join(counts)})")
-    return "; ".join(pieces)
+        return "0"
+    total = len(vulns)
+    return f"{total} vulnerabilidade{'s' if total != 1 else ''}"
 
 
 def fetch_host_report(ip: str, api_key: str, timeout: int) -> HostReport:
@@ -380,33 +378,21 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
         items: List[tuple[str, str | None, tuple[int, int, int] | None]],
         multiline: bool = True,
     ) -> None:
-        label_width = 45
-        value_width = content_width - label_width
-        icon_size = 5.5
         for label, value, icon_color in items:
             if not value:
                 continue
-            current_y = pdf.get_y()
-            text_start = pdf.l_margin
-            if icon_color:
-                pdf.set_fill_color(*icon_color)
-                pdf.ellipse(pdf.l_margin, current_y + 2, icon_size, icon_size, "F")
-                text_start += icon_size + 3
-
-            label_width_adjusted = label_width - (text_start - pdf.l_margin)
-            pdf.set_xy(text_start, current_y)
+            pdf.set_x(pdf.l_margin)
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(*pdf.ACCENT)
-            pdf.cell(label_width_adjusted, 6, label.upper(), align="L")
+            pdf.write(6, label.upper() + ": ")
             pdf.set_font("Helvetica", size=10)
             pdf.set_text_color(*pdf.TEXT_PRIMARY)
-            pdf.set_xy(pdf.l_margin + label_width, current_y)
             if multiline:
-                pdf.multi_cell(value_width, 6, value)
-                pdf.ln(0.5)
+                pdf.multi_cell(0, 6, value)
             else:
-                pdf.cell(value_width, 6, value, ln=True)
-        pdf.ln(2)
+                pdf.write(6, value)
+                pdf.ln(6)
+            pdf.ln(1)
 
     def write_service_details(service: ServiceInfo) -> None:
         header_bits = [f"{service.port}/{service.transport or '?'}"]
@@ -475,7 +461,7 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
         if host.open_ports:
             details.append(("Portas abertas", ", ".join(str(p) for p in host.open_ports), None))
         if host.vulns:
-            details.append(("Vulnerabilidades", summarize_vulns_by_year(host.vulns), None))
+            details.append(("Vulnerabilidades", summarize_total_vulns(host.vulns), None))
         if not any(value for _, value, _ in details):
             details.append(("Informações", "Nenhum metadado divulgado pelo Shodan.", None))
 
@@ -517,12 +503,15 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
 
 
 def collect_host_reports(
-    target: str, api_key: str, timeout: int = DEFAULT_TIMEOUT
+    target: str,
+    api_key: str,
+    timeout: int = DEFAULT_TIMEOUT,
+    pause: float = PAUSE_BETWEEN_REQUESTS,
 ) -> Tuple[List[HostReport], List[ReportWarning]]:
     ips = resolve_target(target)
     host_reports: List[HostReport] = []
     warnings: List[ReportWarning] = []
-    for ip in ips:
+    for idx, ip in enumerate(ips, start=1):
         try:
             host_reports.append(fetch_host_report(ip, api_key, timeout))
         except ValueError as not_found:
@@ -533,12 +522,16 @@ def collect_host_reports(
             status = http_err.response.status_code if http_err.response else None
             if status == 429:
                 warnings.append(ReportWarning(ip=ip, kind="rate_limit", detail=str(status)))
-                break
+                time.sleep(5)
+                continue
             warnings.append(
                 ReportWarning(ip=ip, kind="http", detail=str(status or http_err))
             )
         except requests.RequestException:
             warnings.append(ReportWarning(ip=ip, kind="network"))
+
+        if idx < len(ips) and pause > 0:
+            time.sleep(pause)
     return host_reports, warnings
 
 
