@@ -373,19 +373,74 @@ def create_summary_chart(hosts: List[HostReport], chart_paths: List[str]) -> str
     return create_bar_chart(labels, values, "Resumo do escopo", chart_paths)
 
 
+def create_global_severity_chart(hosts: List[HostReport], chart_paths: List[str]) -> str | None:
+    severity_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    severity_counts: Dict[str, int] = {key: 0 for key in severity_order}
+    for host in hosts:
+        for vuln in host.vulns:
+            severity = severity_from_cvss(cvss_score(vuln.cvss))
+            severity_counts.setdefault(severity, 0)
+            severity_counts[severity] += 1
+        for service in host.services:
+            for vuln in service.vulns:
+                severity = severity_from_cvss(cvss_score(vuln.cvss))
+                severity_counts.setdefault(severity, 0)
+                severity_counts[severity] += 1
+
+    labels = ["Crítico", "Alto", "Médio", "Baixo"]
+    values = [severity_counts[key] for key in severity_order]
+    colors = [rgb_to_hex(ReportPDF.SEVERITY_COLORS[key]) for key in severity_order]
+    if not any(values):
+        return None
+
+    fig, ax = plt.subplots(figsize=(2.8, 2.8))
+    fig.patch.set_facecolor("#ffffff")
+    wedges, _ = ax.pie(values, colors=colors, startangle=90, wedgeprops={"linewidth": 0.5, "edgecolor": "#ffffff"})
+    ax.axis('equal')
+    for i, w in enumerate(wedges):
+        if values[i] > 0:
+            angle = (w.theta2 + w.theta1) / 2.0
+            x = 0.65 * np.cos(np.deg2rad(angle))
+            y = 0.65 * np.sin(np.deg2rad(angle))
+            ax.text(
+                x,
+                y,
+                str(values[i]),
+                ha="center",
+                va="center",
+                color="#ffffff",
+                fontsize=8,
+                weight="bold",
+            )
+    ax.legend(wedges, labels, loc="lower center", bbox_to_anchor=(0.5, -0.18), ncol=4, fontsize=7)
+    ax.set_title("Severidade total", fontsize=9, color="#1c2031")
+    fig.tight_layout()
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    fig.savefig(tmp.name, dpi=220, bbox_inches="tight", transparent=True)
+    plt.close(fig)
+    chart_paths.append(tmp.name)
+    return tmp.name
+
+
 def create_host_chart(host: HostReport, chart_paths: List[str]) -> str | None:
-    labels = ["Portas", "Serviços", "CVEs"]
-    values = [len(set(host.open_ports)), len(host.services), len(host.vulns)]
+    labels = ["Portas", "CVEs"]
+    values = [len(set(host.open_ports)), len(host.vulns)]
     return create_bar_chart(labels, values, f"Host {host.ip}", chart_paths)
 
 
 def create_vuln_severity_chart(host: HostReport, chart_paths: List[str]) -> str | None:
-    severity_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+    severity_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
     severity_counts: Dict[str, int] = {key: 0 for key in severity_order}
     for vuln in host.vulns:
         severity = severity_from_cvss(cvss_score(vuln.cvss))
+        severity_counts.setdefault(severity, 0)
         severity_counts[severity] += 1
-    labels = ["Crítico", "Alto", "Médio", "Baixo", "Info"]
+    for service in host.services:
+        for vuln in service.vulns:
+            severity = severity_from_cvss(cvss_score(vuln.cvss))
+            severity_counts.setdefault(severity, 0)
+            severity_counts[severity] += 1
+    labels = ["Crítico", "Alto", "Médio", "Baixo"]
     values = [severity_counts[key] for key in severity_order]
     colors = [rgb_to_hex(ReportPDF.SEVERITY_COLORS[key]) for key in severity_order]
     if not any(values):
@@ -621,11 +676,16 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
     ]
     write_info_block(summary_items, multiline=False)
     summary_chart = create_summary_chart(hosts, chart_paths)
-    if summary_chart:
-        chart_width = content_width / 2
-        chart_x = pdf.l_margin + (content_width - chart_width) / 2
-        pdf.image(summary_chart, x=chart_x, w=chart_width, h=50)
-        pdf.ln(10)
+    severity_chart = create_global_severity_chart(hosts, chart_paths)
+    if summary_chart or severity_chart:
+        chart_width = (content_width - 6) / 2
+        chart_height = 55
+        y_start = pdf.get_y()
+        if summary_chart:
+            pdf.image(summary_chart, x=pdf.l_margin, y=y_start, w=chart_width, h=chart_height)
+        if severity_chart:
+            pdf.image(severity_chart, x=pdf.l_margin + chart_width + 6, y=y_start, w=chart_width, h=chart_height)
+        pdf.set_y(y_start + chart_height + 6)
 
     pdf.add_page()
 
