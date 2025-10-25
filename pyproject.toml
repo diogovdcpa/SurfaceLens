@@ -1,0 +1,12 @@
+[project]
+name = "gen-shodan"
+version = "0.1.0"
+description = "Ferramenta CLI para consultar a API do Shodan e gerar relatórios em PDF"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.32.3",
+    "fpdf2>=2.7.9",
+    "python-dotenv>=1.0.1",
+    "flask>=3.1.2",
+]
