@@ -5,16 +5,30 @@ SurfaceLens é uma aplicação de linha de comando e web que consulta a API do S
 ## Pré-requisitos
 
 - Python 3.11 ou superior.
-- Dependências listadas no `pyproject.toml` (instale com `uv pip install -r pyproject.toml` ou `pip install -e .`).
-- Uma chave válida da API do [Shodan](https://www.shodan.io/). Defina-a na variável de ambiente `SHODAN_API_KEY`, coloque-a em um arquivo `.env` (carregado automaticamente) ou informe via `--api-key` ao executar.
+- Dependências listadas no `pyproject.toml`. Recomenda-se um ambiente virtual:
+  ```bash
+  python -m venv .venv
+  source .venv/bin/activate  # (Linux/macOS)  |  .venv\Scripts\activate (Windows)
+  pip install "requests>=2.32.3" "fpdf2>=2.7.9" "python-dotenv>=1.0.1" "flask>=3.1.2" "matplotlib>=3.9.2"
+  # ou use o uv:  uv pip install -r pyproject.toml
+  ```
+- Uma chave válida da API do [Shodan](https://www.shodan.io/). Defina `SHODAN_API_KEY` em um `.env` na raiz do projeto (carregado automaticamente tanto pelo CLI quanto pelo servidor web), exporte a variável no shell ou informe via `--api-key`.
+
+### Variáveis de ambiente suportadas
+
+- `SHODAN_API_KEY` **(obrigatória)** – chave da API.
+- `APP_SECRET_KEY` – chave de sessão para o Flask; padrão `dev-secret-key`.
+- `REPORTS_DIR` – diretório onde os PDFs gerados pela interface web são armazenados; padrão `reports/`.
 
 ## Como usar (CLI)
 
 1. Instale as dependências:
    ```bash
-   pip install -e .
+   # com o ambiente virtual ativado
+   pip install "requests>=2.32.3" "fpdf2>=2.7.9" "python-dotenv>=1.0.1" "flask>=3.1.2" "matplotlib>=3.9.2"
    ```
-2. Execute informando o alvo desejado:
+2. Garanta que o `.env` contenha `SHODAN_API_KEY=<sua_chave>` ou exporte `SHODAN_API_KEY` para o ambiente.
+3. Execute informando o alvo desejado (a aplicação carrega automaticamente o `.env` a partir da raiz do projeto, mesmo que você execute o comando fora dela):
    ```bash
    python main.py 8.8.8.8
    ```
@@ -35,7 +49,8 @@ usage: main.py [-h] [-o OUTPUT] [--api-key API_KEY] [--timeout TIMEOUT] target
 Também é possível executar a aplicação como um servidor Flask:
 
 1. Defina `SHODAN_API_KEY` e, opcionalmente, `APP_SECRET_KEY` para os flashes.
-2. Inicie o servidor:
+   > O arquivo `.env` da raiz é carregado automaticamente durante o `flask run`, então basta manter as variáveis definidas nele.
+2. Inicie o servidor (a partir de qualquer diretório, desde que o projeto esteja no `PYTHONPATH`/virtualenv ativo):
    ```bash
    flask --app app run --reload
    ```
