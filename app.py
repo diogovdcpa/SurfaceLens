@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -26,7 +25,9 @@ from shodan_report import (
     warning_message_text,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv()
+load_dotenv(PROJECT_ROOT / ".env")
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("APP_SECRET_KEY", "dev-secret-key")

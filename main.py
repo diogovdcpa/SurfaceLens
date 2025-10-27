@@ -16,6 +16,12 @@ from shodan_report import (
 )
 
 
+def load_environment() -> None:
+    project_env = Path(__file__).resolve().parent / ".env"
+    load_dotenv()
+    load_dotenv(project_env)  # Garantir carregamento mesmo fora do diretório do projeto
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -45,7 +51,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    load_dotenv()
+    load_environment()
     try:
         api_key = load_api_key(args.api_key)
     except RuntimeError as err:
