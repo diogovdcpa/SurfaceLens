@@ -11,6 +11,7 @@ from shodan_report import (
     collect_host_reports,
     default_output_name,
     load_api_key,
+    normalize_targets,
     render_pdf_bytes,
     warning_message_text,
 )
@@ -58,20 +59,31 @@ def main() -> None:
         raise SystemExit(f"Erro: {err}") from err
 
     try:
-        host_reports, warnings = collect_host_reports(args.target, api_key, args.timeout)
-    except socket.gaierror as exc:
-        raise SystemExit(f"Não foi possível resolver {args.target}: {exc}") from exc
-    except RuntimeError as exc:
+        targets = normalize_targets(args.target)
+    except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
-    for warning in warnings:
+    aggregated_reports = []
+    aggregated_warnings = []
+    for individual in targets:
+        try:
+            reports, warnings = collect_host_reports(individual, api_key, args.timeout)
+        except socket.gaierror as exc:
+            raise SystemExit(f"Não foi possível resolver {individual}: {exc}") from exc
+        except RuntimeError as exc:
+            raise SystemExit(f"{individual}: {exc}") from exc
+        aggregated_reports.extend(reports)
+        aggregated_warnings.extend(warnings)
+
+    for warning in aggregated_warnings:
         print(f"Aviso: {warning_message_text(warning, verbose=True)}")
 
-    if not host_reports:
+    if not aggregated_reports:
         raise SystemExit("Nenhum host com dados disponíveis para gerar o relatório.")
 
-    output_path = Path(args.output or default_output_name(args.target))
-    pdf_bytes = render_pdf_bytes(args.target, host_reports)
+    target_label = ", ".join(targets)
+    output_path = Path(args.output or default_output_name(targets))
+    pdf_bytes = render_pdf_bytes(target_label, aggregated_reports)
     output_path.write_bytes(pdf_bytes)
     print(f"Relatório salvo em {output_path}")
 

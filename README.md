@@ -33,6 +33,14 @@ SurfaceLens é uma aplicação de linha de comando e web que consulta a API do S
    python main.py 8.8.8.8
    ```
 
+### Alvos múltiplos em um único PDF
+
+- Informe vários IPs, hostnames ou blocos separados por vírgula (espaços serão ignorados) e todos serão consolidados em um só relatório:
+  ```bash
+  python main.py "177.16.28.48/29, 177.46.222.68/30, 186.215.183.128/26"
+  ```
+- A interface web aceita o mesmo formato no campo de alvo.
+
 ### Opções principais
 
 ```bash
@@ -40,7 +48,7 @@ usage: main.py [-h] [-o OUTPUT] [--api-key API_KEY] [--timeout TIMEOUT] target
 ```
 
 - `target`: IP, hostname, FQDN, domínio ou bloco CIDR (ex: `177.10.40.0/22`, limitado a 1024 IPs por execução).
-- `-o/--output`: caminho do PDF gerado. Se omitido, o arquivo recebe o padrão `relatorio-shodan-<alvo>-<data>.pdf`.
+- `-o/--output`: caminho do PDF gerado. Se omitido, o arquivo recebe um nome automático como `relatorio-192.168.0.1-20250211-143000.pdf`, `relatorio-dominios-20250211-143000.pdf` etc., conforme o tipo/quantidade de alvos.
 - `--api-key`: chave da API do Shodan (caso não tenha configurado `SHODAN_API_KEY`).
 - `--timeout`: timeout das requisições, em segundos (padrão 20s).
 

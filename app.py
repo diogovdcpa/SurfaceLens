@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import socket
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from shodan_report import (
     collect_host_reports,
     default_output_name,
     load_api_key,
+    normalize_targets,
     render_pdf_bytes,
     warning_message_text,
 )
@@ -88,13 +90,9 @@ def index():
             reports=get_reports(),
         )
 
-    target = request.form.get("target", "").strip()
+    raw_target = request.form.get("target", "")
     timeout = parse_timeout(request.form.get("timeout"))
     api_key_input = request.form.get("api_key") or None
-
-    if not target:
-        flash("Informe um IP, hostname ou domínio para gerar o relatório.", "error")
-        return redirect(url_for("index"))
 
     try:
         api_key = load_api_key(api_key_input)
@@ -103,22 +101,37 @@ def index():
         return redirect(url_for("index"))
 
     try:
-        host_reports, warnings = collect_host_reports(target, api_key, timeout)
-    except RuntimeError as exc:
+        targets = normalize_targets(raw_target)
+    except ValueError as exc:
         flash(str(exc), "error")
+        return redirect(url_for("index"))
+
+    aggregated_reports: list = []
+    aggregated_warnings: list = []
+    try:
+        for individual in targets:
+            reports, warnings = collect_host_reports(individual, api_key, timeout)
+            aggregated_reports.extend(reports)
+            aggregated_warnings.extend(warnings)
+    except RuntimeError as exc:
+        flash(f"{individual}: {exc}", "error")
+        return redirect(url_for("index"))
+    except socket.gaierror as exc:
+        flash(f"Não foi possível resolver {individual}: {exc}", "error")
         return redirect(url_for("index"))
     except Exception:
         flash("Não foi possível gerar o relatório. Tente novamente em instantes.", "error")
         return redirect(url_for("index"))
 
-    flash_warnings(warnings)
+    flash_warnings(aggregated_warnings)
 
-    if not host_reports:
+    if not aggregated_reports:
         flash("Nenhum host com dados disponíveis para gerar o relatório.", "error")
         return redirect(url_for("index"))
 
-    pdf_bytes = render_pdf_bytes(target, host_reports)
-    filename = default_output_name(target)
+    target_label = ", ".join(targets)
+    pdf_bytes = render_pdf_bytes(target_label, aggregated_reports)
+    filename = default_output_name(targets)
     file_path = REPORTS_DIR / filename
     file_path.write_bytes(pdf_bytes)
     send_file(
