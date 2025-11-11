@@ -183,6 +183,82 @@ def resolve_target(target: str) -> List[str]:
     return unique_ips
 
 
+def fetch_domain_ip_history(domain: str, api_key: str, timeout: int) -> tuple[List[str], str | None]:
+    """
+    Consulta o endpoint de DNS passivo do Shodan para recuperar IPs associados
+    a um domínio. Retorna (ips, erro) onde erro é uma string pronta para logs.
+    """
+    url = f"{API_BASE_URL}/dns/domain/{domain}"
+    params = {"key": api_key, "history": "true"}
+    try:
+        response = requests.get(url, params=params, timeout=timeout)
+    except requests.RequestException as exc:
+        return [], f"falha de rede: {exc}"
+
+    if response.status_code == 404:
+        # Sem dados históricos para o domínio: não é um erro
+        return [], None
+
+    if not response.ok:
+        return [], f"HTTP {response.status_code}"
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        return [], f"resposta inválida do Shodan: {exc}"
+
+    ips: List[str] = []
+    for record in payload.get("data", []):
+        record_type = (record.get("type") or "").upper()
+        value = record.get("value")
+        if record_type != "A" or not value:
+            continue
+        if not is_ip(value):
+            continue
+        ips.append(value)
+    return ips, None
+
+
+def expand_ips_with_shodan_domain_data(
+    target: str,
+    dns_ips: List[str],
+    api_key: str,
+    timeout: int,
+) -> tuple[List[str], List[ReportWarning]]:
+    """
+    Combina os IPs resolvidos via DNS com os IPs históricos vistos pelo Shodan
+    para o domínio informado.
+    """
+    if is_ip(target) or "/" in target:
+        return dns_ips, []
+
+    shodan_ips, error = fetch_domain_ip_history(target, api_key, timeout)
+    warnings: List[ReportWarning] = []
+    if error:
+        warnings.append(ReportWarning(ip=target, kind="domain_lookup", detail=error))
+        return dns_ips, warnings
+
+    if not shodan_ips:
+        return dns_ips, warnings
+
+    combined: List[str] = []
+    seen = set()
+    for value in [*dns_ips, *shodan_ips]:
+        if value in seen:
+            continue
+        combined.append(value)
+        seen.add(value)
+
+    if len(combined) > MAX_TARGET_IPS:
+        raise RuntimeError(
+            (
+                f"O domínio {target} possui {len(combined)} IPs combinando DNS e Shodan, "
+                f"acima do limite de {MAX_TARGET_IPS}. Reduza o escopo antes de continuar."
+            )
+        )
+    return combined, warnings
+
+
 def shodan_request(path: str, api_key: str, timeout: int) -> Dict[str, Any]:
     url = f"{API_BASE_URL}{path}"
     params = {"key": api_key}
@@ -715,8 +791,9 @@ def collect_host_reports(
     pause: float = PAUSE_BETWEEN_REQUESTS,
 ) -> Tuple[List[HostReport], List[ReportWarning]]:
     ips = resolve_target(target)
+    ips, domain_warnings = expand_ips_with_shodan_domain_data(target, ips, api_key, timeout)
     host_reports: List[HostReport] = []
-    warnings: List[ReportWarning] = []
+    warnings: List[ReportWarning] = domain_warnings
     for idx, ip in enumerate(ips, start=1):
         try:
             host_reports.append(fetch_host_report(ip, api_key, timeout))
@@ -755,6 +832,10 @@ def warning_message_text(warning: ReportWarning, verbose: bool = False) -> str:
         base = (
             f"Limite de requisições da API atingido ao consultar {warning.ip}. "
             "Aguarde alguns instantes antes de tentar novamente."
+        )
+    elif warning.kind == "domain_lookup":
+        base = (
+            f"{warning.ip}: não foi possível recuperar os IPs históricos do domínio via Shodan."
         )
     else:
         base = f"{warning.ip}: {warning.kind}."
