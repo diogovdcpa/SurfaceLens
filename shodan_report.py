@@ -183,6 +183,23 @@ def resolve_target(target: str) -> List[str]:
     return unique_ips
 
 
+TARGET_SPLIT_PATTERN = re.compile(r",")
+
+
+def normalize_targets(raw: str | None) -> List[str]:
+    """
+    Divide uma string com alvos separados por vírgula em uma lista normalizada.
+    Remove espaços extras e ignora entradas vazias.
+    """
+    if not raw:
+        raise ValueError("Informe ao menos um IP, hostname, domínio ou bloco CIDR.")
+    tokens = [segment.strip() for segment in TARGET_SPLIT_PATTERN.split(raw)]
+    targets = [token for token in tokens if token]
+    if not targets:
+        raise ValueError("Informe ao menos um IP, hostname, domínio ou bloco CIDR.")
+    return targets
+
+
 def fetch_domain_ip_history(domain: str, api_key: str, timeout: int) -> tuple[List[str], str | None]:
     """
     Consulta o endpoint de DNS passivo do Shodan para recuperar IPs associados
@@ -593,10 +610,42 @@ def slugify(value: str) -> str:
     return safe.strip("-_.") or "alvo"
 
 
-def default_output_name(target: str) -> str:
-    slug = slugify(target)
+def classify_target_label(targets: Sequence[str]) -> str:
+    """
+    Define o prefixo do arquivo com base na quantidade e no tipo dos alvos.
+    """
+    if not targets:
+        return "relatorio-alvo"
+    if len(targets) == 1:
+        target = targets[0]
+        if "/" in target:
+            network, _, cidr = target.partition("/")
+            return f"relatorio-{slugify(network)}-{cidr or 'cidr'}"
+        if is_ip(target):
+            return f"relatorio-{slugify(target)}"
+        return f"relatorio-{slugify(target)}"
+
+    # múltiplos alvos
+    all_ips = all(is_ip(item) and "/" not in item for item in targets)
+    all_blocks = all("/" in item for item in targets)
+    all_domains = all(not is_ip(item.split("/")[0]) and "/" not in item for item in targets)
+
+    if all_ips:
+        return "relatorio-ips"
+    if all_blocks:
+        return "relatorio-blocos"
+    if all_domains:
+        return "relatorio-dominios"
+    return "relatorio-alvos"
+
+
+def default_output_name(targets: Sequence[str]) -> str:
+    """
+    Gera o nome final do PDF com base em todos os alvos recebidos.
+    """
+    prefix = classify_target_label(targets)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return f"relatorio-shodan-{slug}-{timestamp}.pdf"
+    return f"{prefix}-{timestamp}.pdf"
 
 
 def list_to_text(values: Sequence[str]) -> str | None:
