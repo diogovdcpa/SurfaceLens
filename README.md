@@ -70,6 +70,6 @@ O arquivo é salvo no diretório atual (ou no caminho especificado em `-o`).
 
 ## Dicas
 
-- Se o alvo for um domínio, a aplicação resolve para todos os IPs disponíveis e gera uma seção para cada um.
+- Se o alvo for um domínio, a aplicação combina os IPs resolvidos via DNS com o histórico passivo do Shodan (`/dns/domain`) e gera uma seção para cada endereço encontrado.
 - Caso o IP não possua dados públicos no Shodan, um aviso é exibido e ele é ignorado no relatório.
 - Adapte o relatório conforme necessário (por exemplo, adicionando gráficos ou traduzindo campos) estendendo o código em `main.py`.
