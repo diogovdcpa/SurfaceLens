@@ -84,45 +84,33 @@ class ReportPDF(FPDF):
         "LOW": (25, 118, 210),
         "INFO": (85, 139, 47),
     }
+    BRAND_TITLE = "Netsafe surface vulnerability report"
 
     def __init__(self) -> None:
         super().__init__(orientation="P", unit="mm", format="A4")
-        # Margens e quebra automática definem o layout base (mude aqui para espaçamentos globais)
-        self.set_margins(20, 34, 20)
-        self.set_auto_page_break(auto=True, margin=25)
-
-    def __init__(self, logo_path: str | None = None) -> None:
-        super().__init__(orientation="P", unit="mm", format="A4")
-        self.logo_path = logo_path
+        self.brand_title = self.BRAND_TITLE
         self.header_height = 28
+        self.header_enabled = True
         # Margens e quebra automática definem o layout base (mude aqui para espaçamentos globais)
         self.set_margins(20, 28, 20)
         self.set_auto_page_break(auto=True, margin=25)
 
     def header(self) -> None:  # pragma: no cover - visual helper
-        # Fundo geral e barra superior – ajuste as cores para alterar a paleta
+        if not getattr(self, "header_enabled", True):
+            return
+        # Fundo geral e barra superior – cobertura separada evita sobreposição visual
+        body_height = max(self.h - self.header_height, 0)
         self.set_fill_color(*self.PAGE_BG)
-        self.rect(0, 0, self.w, self.h, "F")
+        self.rect(0, self.header_height, self.w, body_height, "F")
         self.set_fill_color(*self.HEADER_BG)
         self.rect(0, 0, self.w, self.header_height, "F")
-        self.set_draw_color(*self.BORDER_COLOR)
-        self.line(self.l_margin, self.header_height, self.w - self.r_margin, self.header_height)
         self.set_text_color(255, 255, 255)
         self.set_xy(self.l_margin, 8)
-        logo_width = 20
-        if self.logo_path:
-            try:
-                self.image(self.logo_path, x=self.l_margin, y=6, h=18)
-                self.set_xy(self.l_margin + logo_width + 4, 9)
-            except Exception:
-                self.set_xy(self.l_margin, 9)
-        else:
-            self.set_xy(self.l_margin, 9)
         self.set_font("Helvetica", "B", 18)
-        self.cell(0, 10, "SurfaceLens Report", align="L")
+        self.cell(0, 10, self.brand_title, align="L")
         self.ln(8)
         # Garante que todo conteúdo da página comece abaixo do cabeçalho
-        self.set_y(self.header_height + 4)
+        self.set_y(self.header_height + 8)
 
     def section_title(self, title: str, width: float, uppercase: bool = True) -> None:
         # Cabeçalho de cada seção – altere preenchimento/tipografia para um look diferente
@@ -655,9 +643,86 @@ def list_to_text(values: Sequence[str]) -> str | None:
 
 
 def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
-    logo_path = Path(__file__).with_name("static").joinpath("surfacelens-logo.svg")
-    pdf = ReportPDF(logo_path=str(logo_path) if logo_path.exists() else None)
+    pdf = ReportPDF()
     chart_paths: List[str] = []
+    generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+
+    def render_cover_page() -> None:
+        original_header = pdf.header_enabled
+        pdf.header_enabled = False
+        pdf.add_page()
+        pdf.set_fill_color(18, 11, 15)
+        pdf.rect(0, 0, pdf.w, pdf.h, "F")
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_xy(pdf.l_margin, 60)
+        cover_width = pdf.w - pdf.l_margin - pdf.r_margin
+        pdf.set_font("Helvetica", size=14)
+        pdf.cell(cover_width, 8, "NetSafe MDR | Relatório executivo", ln=1)
+        pdf.ln(8)
+        pdf.set_font("Helvetica", "B", 34)
+        pdf.cell(cover_width, 16, "NETSAFE SURFACE", ln=1)
+        pdf.cell(cover_width, 16, "VULNERABILITY REPORT", ln=1)
+        pdf.ln(6)
+        pdf.set_draw_color(255, 255, 255)
+        pdf.set_line_width(0.5)
+        pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+        pdf.ln(6)
+        pdf.set_font("Helvetica", size=12)
+        pdf.multi_cell(
+            cover_width * 0.75,
+            7,
+            "Avaliação detalhada da superfície de ataque e vulnerabilidades priorizadas",
+        )
+        pdf.set_y(pdf.h - 60)
+        pdf.set_font("Helvetica", size=11)
+        pdf.multi_cell(cover_width, 6, f"Alvo: {target}")
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(cover_width, 6, f"Gerado em: {generated_at}", align="R")
+        pdf.header_enabled = original_header
+
+    def render_context_page() -> None:
+        original_header = pdf.header_enabled
+        pdf.header_enabled = False
+        pdf.add_page()
+        pdf.set_fill_color(*pdf.PAGE_BG)
+        pdf.rect(0, 0, pdf.w, pdf.h, "F")
+        pdf.set_text_color(*pdf.TEXT_PRIMARY)
+        pdf.set_xy(pdf.l_margin, 35)
+        context_width = pdf.w - pdf.l_margin - pdf.r_margin
+        pdf.set_font("Helvetica", "B", 20)
+        pdf.multi_cell(context_width, 10, "Contra capa")
+        pdf.ln(4)
+        sections = [
+            (
+                "1. Introdução",
+                [
+                    "Atravéz do serviço de MDR da NetSafe, apresentamos este relatório com uma análise da superfície de ataque da organização, identificando vulnerabilidades cibernéticas que podem ser exploradas por agentes maliciosos. O objetivo é avaliar riscos, priorizar correções e fortalecer a postura de segurança.",
+                    "A superfície de ataque é o conjunto de todos os pontos de entrada potenciais que um invasor pode utilizar para comprometer sistemas, redes e aplicações.",
+                ],
+            ),
+            (
+                "2. Objetivo e Escopo",
+                [
+                    "O objetivo deste relatório é mapear e avaliar vulnerabilidades identificadas em ativos internos e externos, incluindo servidores, endpoints, APIs e recursos em nuvem.",
+                    "O escopo da análise inclui ativos corporativos expostos à internet e infraestruturas críticas internas.",
+                ],
+            ),
+        ]
+        for title, paragraphs in sections:
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.multi_cell(context_width, 8, title)
+            pdf.ln(1)
+            pdf.set_font("Helvetica", size=11)
+            for paragraph in paragraphs:
+                pdf.multi_cell(context_width, 6.2, paragraph)
+                pdf.ln(2)
+            pdf.ln(3)
+        pdf.header_enabled = original_header
+
+    render_cover_page()
+    render_context_page()
+
+    pdf.header_enabled = True
     pdf.add_page()
     content_width = pdf.w - pdf.l_margin - pdf.r_margin
     pdf.set_text_color(*pdf.TEXT_PRIMARY)
@@ -790,7 +855,6 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
                 write_service_details(service)
         pdf.ln(2)
 
-    generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
     pdf.ln(4)
     pdf.section_title("Resumo do alvo", content_width)
     summary_items = [
