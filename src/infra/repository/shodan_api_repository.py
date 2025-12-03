@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import requests
+from datetime import datetime, timezone
 
 from domain.entity import HostReport, ServiceInfo, VulnerabilityDetail
 from domain.repository import ShodanRepository
@@ -72,6 +72,21 @@ def parse_month(value) -> str | None:
         return None
 
 
+def parse_timestamp(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        if isinstance(value, str):
+            clean = value.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(clean)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+    return None
+
+
 def build_history_trend(entries: list[dict]) -> dict[str, list[int]] | None:
     monthly_ports: dict[str, set[int]] = {}
     monthly_cves: dict[str, int] = {}
@@ -95,6 +110,28 @@ def build_history_trend(entries: list[dict]) -> dict[str, list[int]] | None:
     ports = [len(monthly_ports.get(month, set())) for month in labels]
     cves = [monthly_cves.get(month, 0) for month in labels]
     return {"labels": labels, "ports": ports, "cves": cves}
+
+
+def select_latest_services(entries: list[dict]) -> list[dict]:
+    """
+    Quando history=true, o Shodan devolve snapshots antigos em payload['data'].
+    Seleciona o snapshot mais recente por (porta, transporte) para evitar cartões duplicados.
+    """
+    latest: dict[tuple[int | None, str], tuple[dict, datetime | None]] = {}
+    for entry in entries:
+        port = entry.get("port")
+        transport = (entry.get("transport") or "").upper()
+        key = (port, transport)
+        current_ts = parse_timestamp(entry.get("timestamp"))
+        if key not in latest:
+            latest[key] = (entry, current_ts)
+            continue
+        _, stored_ts = latest[key]
+        if current_ts and (stored_ts is None or current_ts > stored_ts):
+            latest[key] = (entry, current_ts)
+    # Ordena por porta para manter consistência visual
+    sorted_items = sorted(latest.values(), key=lambda item: (item[0].get("port") or 0))
+    return [item[0] for item in sorted_items]
 
 
 class ShodanAPIRepository(ShodanRepository):
@@ -148,8 +185,10 @@ class ShodanAPIRepository(ShodanRepository):
     def fetch_host_report(self, ip: str, timeout: int, include_history: bool = False) -> HostReport:
         params = {"history": "true"} if include_history else None
         payload = self.shodan_request(f"/shodan/host/{ip}", timeout, params=params)
+        entries = payload.get("data", []) or []
+        service_entries = select_latest_services(entries) if include_history else entries
         services: list[ServiceInfo] = []
-        for entry in payload.get("data", []):
+        for entry in service_entries:
             service = ServiceInfo(
                 port=entry.get("port"),
                 transport=(entry.get("transport") or "").upper(),

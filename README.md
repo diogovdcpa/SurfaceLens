@@ -44,7 +44,7 @@ Pontos de extensão rápidos:
 - `SHODAN_API_KEY` **(obrigatória)** – chave da API.
 - `APP_SECRET_KEY` – chave de sessão para o Flask; padrão `dev-secret-key`.
 - `REPORTS_DIR` – diretório onde os PDFs gerados pela interface web são armazenados; padrão `src/reports/` (relativo à pasta `src`).
-- `USE_SHODAN_HISTORY` – quando `true`, consulta `/shodan/host` com `history=true` e exibe tendência histórica (porta/CVEs) no relatório HTML; pode aumentar tempo/uso de créditos.
+- `USE_SHODAN_HISTORY` – consulta `/shodan/host` com `history=true` e exibe tendência histórica (porta/CVEs) no HTML; defina `USE_SHODAN_HISTORY=false` para desativar (pode aumentar tempo/uso de créditos).
 
 ## Como usar (web)
 
