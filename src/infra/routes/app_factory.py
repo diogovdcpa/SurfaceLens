@@ -34,7 +34,12 @@ def create_app() -> Flask:
     reports_dir = Path(reports_env) if reports_env else SRC_ROOT / "reports"
     if not reports_dir.is_absolute():
         reports_dir = (SRC_ROOT / reports_dir).resolve()
-    reports_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        reports_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Ambiente somente leitura (ex: serverless). Usa /tmp como fallback.
+        reports_dir = Path("/tmp/reports")
+        reports_dir.mkdir(parents=True, exist_ok=True)
 
     default_api_key = os.getenv("SHODAN_API_KEY")
     web_bp = build_web_blueprint(
