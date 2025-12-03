@@ -1,6 +1,31 @@
 # SurfaceLens
 
-SurfaceLens é uma aplicação de linha de comando e web que consulta a API do Shodan a partir de um IP, hostname, domínio ou bloco CIDR e gera automaticamente um relatório em PDF com os serviços expostos pelo alvo.
+SurfaceLens é uma aplicação web que consulta a API do Shodan a partir de um IP, hostname, domínio ou bloco CIDR e gera automaticamente um relatório em PDF com os serviços expostos pelo alvo. O ponto de entrada Flask fica em `main.py` (expondo `create_app`).
+
+## Estrutura (DDD simplificado)
+
+```
+src/
+  application/
+    dtos/                 # Objetos de transporte (pedido/resultado de relatório)
+    use_cases/            # Caso de uso de geração do relatório e PDF
+  domain/
+    entity/               # Entidades: HostReport, ServiceInfo, VulnerabilityDetail, ReportWarning
+    repository/           # Contratos de repositório (ShodanRepository)
+  infra/
+    controllers/          # Auxiliares de controller (flash, parse, listagem de PDFs)
+    repository/           # Implementação do repositório Shodan via API HTTP
+    routes/               # Blueprint e fábrica do Flask (`create_app`)
+  static/                 # Assets estáticos do front
+  templates/              # Templates HTML do Flask
+  reports/                # Saída padrão dos PDFs gerados
+```
+
+Pontos de extensão rápidos:
+- PDF e regras do caso de uso: `src/application/use_cases/report_generation.py`.
+- Contrato do Shodan: `src/domain/repository/shodan_repository.py`.
+- Implementação da API do Shodan: `src/infra/repository/shodan_api_repository.py` (troque aqui se quiser mock/cache).
+- Rotas web/blueprint: `src/infra/routes/web_routes.py`.
 
 ## Pré-requisitos
 
@@ -12,57 +37,25 @@ SurfaceLens é uma aplicação de linha de comando e web que consulta a API do S
   pip install "requests>=2.32.3" "fpdf2>=2.7.9" "python-dotenv>=1.0.1" "flask>=3.1.2" "matplotlib>=3.9.2"
   # ou use o uv:  uv pip install -r pyproject.toml
   ```
-- Uma chave válida da API do [Shodan](https://www.shodan.io/). Defina `SHODAN_API_KEY` em um `.env` na raiz do projeto (carregado automaticamente tanto pelo CLI quanto pelo servidor web), exporte a variável no shell ou informe via `--api-key`.
+- Uma chave válida da API do [Shodan](https://www.shodan.io/). Defina `SHODAN_API_KEY` em um `.env` na raiz do projeto ou exporte a variável no shell.
 
-### Variáveis de ambiente suportadas
+### Variáveis de ambiente
 
 - `SHODAN_API_KEY` **(obrigatória)** – chave da API.
 - `APP_SECRET_KEY` – chave de sessão para o Flask; padrão `dev-secret-key`.
-- `REPORTS_DIR` – diretório onde os PDFs gerados pela interface web são armazenados; padrão `reports/`.
+- `REPORTS_DIR` – diretório onde os PDFs gerados pela interface web são armazenados; padrão `src/reports/` (relativo à pasta `src`).
 
-## Como usar (CLI)
+## Como usar (web)
 
-1. Instale as dependências:
-   ```bash
-   # com o ambiente virtual ativado
-   pip install "requests>=2.32.3" "fpdf2>=2.7.9" "python-dotenv>=1.0.1" "flask>=3.1.2" "matplotlib>=3.9.2"
-   ```
+1. Instale as dependências (veja acima).
 2. Garanta que o `.env` contenha `SHODAN_API_KEY=<sua_chave>` ou exporte `SHODAN_API_KEY` para o ambiente.
-3. Execute informando o alvo desejado (a aplicação carrega automaticamente o `.env` a partir da raiz do projeto, mesmo que você execute o comando fora dela):
+3. Inicie o servidor:
    ```bash
-   python main.py 8.8.8.8
+   flask --app main run --reload
+   # ou
+   python main.py
    ```
-
-### Alvos múltiplos em um único PDF
-
-- Informe vários IPs, hostnames ou blocos separados por vírgula (espaços serão ignorados) e todos serão consolidados em um só relatório:
-  ```bash
-  python main.py "177.16.28.48/29, 177.46.222.68/30, 186.215.183.128/26"
-  ```
-- A interface web aceita o mesmo formato no campo de alvo.
-
-### Opções principais
-
-```bash
-usage: main.py [-h] [-o OUTPUT] [--api-key API_KEY] [--timeout TIMEOUT] target
-```
-
-- `target`: IP, hostname, FQDN, domínio ou bloco CIDR (ex: `177.10.40.0/22`, limitado a 1024 IPs por execução).
-- `-o/--output`: caminho do PDF gerado. Se omitido, o arquivo recebe um nome automático como `relatorio-192.168.0.1-20250211-143000.pdf`, `relatorio-dominios-20250211-143000.pdf` etc., conforme o tipo/quantidade de alvos.
-- `--api-key`: chave da API do Shodan (caso não tenha configurado `SHODAN_API_KEY`).
-- `--timeout`: timeout das requisições, em segundos (padrão 20s).
-
-## Funcionamento via Web
-
-Também é possível executar a aplicação como um servidor Flask:
-
-1. Defina `SHODAN_API_KEY` e, opcionalmente, `APP_SECRET_KEY` para os flashes.
-   > O arquivo `.env` da raiz é carregado automaticamente durante o `flask run`, então basta manter as variáveis definidas nele.
-2. Inicie o servidor (a partir de qualquer diretório, desde que o projeto esteja no `PYTHONPATH`/virtualenv ativo):
-   ```bash
-   flask --app app run --reload
-   ```
-3. Acesse `http://127.0.0.1:5000` e informe o alvo pelo formulário. O relatório será baixado automaticamente após a geração.
+4. Acesse `http://127.0.0.1:5000`, informe o alvo (IP/hostname/domínio/bloco) e aguarde o download automático do PDF.
 
 O endpoint `/healthz` retorna o status da aplicação para monitoramento simples.
 
@@ -74,10 +67,10 @@ O PDF inclui:
 - Para cada IP retornado pelo Shodan: hostnames, organização, ISP, sistema operacional, localização, tags e portas abertas.
 - Listagem detalhada dos serviços expostos, com produto, versão, CPEs, tags e vulnerabilidades reportadas pela API.
 
-O arquivo é salvo no diretório atual (ou no caminho especificado em `-o`).
+Os arquivos são salvos no diretório configurado em `REPORTS_DIR`.
 
 ## Dicas
 
 - Se o alvo for um domínio, a aplicação combina os IPs resolvidos via DNS com o histórico passivo do Shodan (`/dns/domain`) e gera uma seção para cada endereço encontrado.
 - Caso o IP não possua dados públicos no Shodan, um aviso é exibido e ele é ignorado no relatório.
-- Adapte o relatório conforme necessário (por exemplo, adicionando gráficos ou traduzindo campos) estendendo o código em `main.py`.
+- Adapte o relatório conforme necessário (por exemplo, adicionando gráficos ou traduzindo campos) estendendo o código em `src/`.
