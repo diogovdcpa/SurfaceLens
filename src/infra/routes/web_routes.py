@@ -24,7 +24,7 @@ from application.use_cases.report_generation import (
     render_pdf_bytes,
 )
 from domain.repository import ShodanRepository
-from infra.controllers.web_controller import flash_warnings, get_reports, parse_timeout
+from infra.controllers.web_controller import flash_warnings, get_reports
 from infra.repository.shodan_api_repository import ShodanAPIRepository
 
 
@@ -56,7 +56,7 @@ def build_web_blueprint(
 
         raw_target = request.form.get("target", "")
         company = (request.form.get("company") or "").strip()
-        timeout = parse_timeout(request.form.get("timeout"))
+        timeout = DEFAULT_TIMEOUT
         api_key_input = request.form.get("api_key") or None
 
         if not company:
