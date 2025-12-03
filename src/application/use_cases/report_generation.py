@@ -6,7 +6,6 @@ import re
 import socket
 import tempfile
 import time
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
@@ -16,123 +15,22 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-
 import requests
 from fpdf import FPDF, XPos, YPos
 
-API_BASE_URL = "https://api.shodan.io"
+from domain.entity import HostReport, ReportWarning, ServiceInfo, VulnerabilityDetail
+from domain.repository import ShodanRepository
+
 DEFAULT_TIMEOUT = 60
 MAX_TARGET_IPS = 1024
 PAUSE_BETWEEN_REQUESTS = 1.0
+TARGET_SPLIT_PATTERN = re.compile(r",")
 
 
-@dataclass
-class VulnerabilityDetail:
-    cve: str
-    cvss: float | str | None = None
-    verified: bool | None = None
-    references: List[str] = field(default_factory=list)
-
-
-@dataclass
-class ServiceInfo:
-    port: int
-    transport: str
-    product: str | None
-    version: str | None
-    cpe: List[str] = field(default_factory=list)
-    tags: List[str] = field(default_factory=list)
-    vulns: List[VulnerabilityDetail] = field(default_factory=list)
-    info: str | None = None
-
-
-@dataclass
-class HostReport:
-    ip: str
-    hostnames: List[str]
-    org: str | None
-    isp: str | None
-    os: str | None
-    location: str | None
-    open_ports: List[int]
-    tags: List[str]
-    vulns: List[VulnerabilityDetail]
-    services: List[ServiceInfo]
-
-
-@dataclass
-class ReportWarning:
-    ip: str
-    kind: str
-    detail: str | None = None
-
-
-class ReportPDF(FPDF):
-    PAGE_BG = (247, 249, 252)
-    HEADER_BG = (21, 35, 55)
-    SECTION_BG = (227, 233, 242)
-    CARD_BG = (255, 255, 255)
-    CHIP_BG = (236, 240, 247)
-    ACCENT = (28, 99, 189)
-    TEXT_PRIMARY = (24, 32, 45)
-    TEXT_MUTED = (110, 118, 138)
-    BORDER_COLOR = (210, 216, 228)
-    SEVERITY_COLORS = {
-        "CRITICAL": (179, 38, 30),
-        "HIGH": (227, 119, 15),
-        "MEDIUM": (210, 155, 0),
-        "LOW": (25, 118, 210),
-        "INFO": (85, 139, 47),
-    }
-    BRAND_TITLE = "Netsafe surface vulnerability report"
-
-    def __init__(self) -> None:
-        super().__init__(orientation="P", unit="mm", format="A4")
-        self.brand_title = self.BRAND_TITLE
-        self.header_height = 28
-        self.header_enabled = True
-        # Margens e quebra automática definem o layout base (mude aqui para espaçamentos globais)
-        self.set_margins(20, 28, 20)
-        self.set_auto_page_break(auto=True, margin=25)
-
-    def header(self) -> None:  # pragma: no cover - visual helper
-        if not getattr(self, "header_enabled", True):
-            return
-        # Fundo geral e barra superior – cobertura separada evita sobreposição visual
-        body_height = max(self.h - self.header_height, 0)
-        self.set_fill_color(*self.PAGE_BG)
-        self.rect(0, self.header_height, self.w, body_height, "F")
-        self.set_fill_color(*self.HEADER_BG)
-        self.rect(0, 0, self.w, self.header_height, "F")
-        self.set_text_color(255, 255, 255)
-        self.set_xy(self.l_margin, 8)
-        self.set_font("Helvetica", "B", 18)
-        self.cell(0, 10, self.brand_title, align="L")
-        self.ln(8)
-        # Garante que todo conteúdo da página comece abaixo do cabeçalho
-        self.set_y(self.header_height + 8)
-
-    def section_title(self, title: str, width: float, uppercase: bool = True) -> None:
-        # Cabeçalho de cada seção – altere preenchimento/tipografia para um look diferente
-        text = title.upper() if uppercase else title
-        self.set_fill_color(*self.SECTION_BG)
-        self.set_text_color(*self.TEXT_PRIMARY)
-        self.set_font("Helvetica", "B", 13)
-        self.cell(
-            width,
-            9,
-            text,
-            fill=True,
-            new_x=XPos.LMARGIN,
-            new_y=YPos.NEXT,
-        )
-        self.ln(2)
-
-
-def load_api_key(cli_value: str | None) -> str:
-    api_key = cli_value or os.getenv("SHODAN_API_KEY")
+def load_api_key(user_value: str | None, fallback_env: str | None = None) -> str:
+    api_key = user_value or fallback_env
     if not api_key:
-        raise RuntimeError("Informe a chave do Shodan via parâmetro ou variável SHODAN_API_KEY")
+        raise RuntimeError("Informe a chave do Shodan ou configure SHODAN_API_KEY")
     return api_key
 
 
@@ -142,6 +40,20 @@ def is_ip(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def normalize_targets(raw: str | None) -> List[str]:
+    """
+    Divide uma string com alvos separados por vírgula em uma lista normalizada.
+    Remove espaços extras e ignora entradas vazias.
+    """
+    if not raw:
+        raise ValueError("Informe ao menos um IP, hostname, domínio ou bloco CIDR.")
+    tokens = [segment.strip() for segment in TARGET_SPLIT_PATTERN.split(raw)]
+    targets = [token for token in tokens if token]
+    if not targets:
+        raise ValueError("Informe ao menos um IP, hostname, domínio ou bloco CIDR.")
+    return targets
 
 
 def resolve_target(target: str) -> List[str]:
@@ -171,63 +83,10 @@ def resolve_target(target: str) -> List[str]:
     return unique_ips
 
 
-TARGET_SPLIT_PATTERN = re.compile(r",")
-
-
-def normalize_targets(raw: str | None) -> List[str]:
-    """
-    Divide uma string com alvos separados por vírgula em uma lista normalizada.
-    Remove espaços extras e ignora entradas vazias.
-    """
-    if not raw:
-        raise ValueError("Informe ao menos um IP, hostname, domínio ou bloco CIDR.")
-    tokens = [segment.strip() for segment in TARGET_SPLIT_PATTERN.split(raw)]
-    targets = [token for token in tokens if token]
-    if not targets:
-        raise ValueError("Informe ao menos um IP, hostname, domínio ou bloco CIDR.")
-    return targets
-
-
-def fetch_domain_ip_history(domain: str, api_key: str, timeout: int) -> tuple[List[str], str | None]:
-    """
-    Consulta o endpoint de DNS passivo do Shodan para recuperar IPs associados
-    a um domínio. Retorna (ips, erro) onde erro é uma string pronta para logs.
-    """
-    url = f"{API_BASE_URL}/dns/domain/{domain}"
-    params = {"key": api_key, "history": "true"}
-    try:
-        response = requests.get(url, params=params, timeout=timeout)
-    except requests.RequestException as exc:
-        return [], f"falha de rede: {exc}"
-
-    if response.status_code == 404:
-        # Sem dados históricos para o domínio: não é um erro
-        return [], None
-
-    if not response.ok:
-        return [], f"HTTP {response.status_code}"
-
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        return [], f"resposta inválida do Shodan: {exc}"
-
-    ips: List[str] = []
-    for record in payload.get("data", []):
-        record_type = (record.get("type") or "").upper()
-        value = record.get("value")
-        if record_type != "A" or not value:
-            continue
-        if not is_ip(value):
-            continue
-        ips.append(value)
-    return ips, None
-
-
 def expand_ips_with_shodan_domain_data(
     target: str,
     dns_ips: List[str],
-    api_key: str,
+    repository: ShodanRepository,
     timeout: int,
 ) -> tuple[List[str], List[ReportWarning]]:
     """
@@ -237,7 +96,7 @@ def expand_ips_with_shodan_domain_data(
     if is_ip(target) or "/" in target:
         return dns_ips, []
 
-    shodan_ips, error = fetch_domain_ip_history(target, api_key, timeout)
+    shodan_ips, error = repository.fetch_domain_history(target, timeout)
     warnings: List[ReportWarning] = []
     if error:
         warnings.append(ReportWarning(ip=target, kind="domain_lookup", detail=error))
@@ -264,58 +123,38 @@ def expand_ips_with_shodan_domain_data(
     return combined, warnings
 
 
-def shodan_request(path: str, api_key: str, timeout: int) -> Dict[str, Any]:
-    url = f"{API_BASE_URL}{path}"
-    params = {"key": api_key}
-    response = requests.get(url, params=params, timeout=timeout)
-    if response.status_code == 404:
-        raise ValueError("Alvo não encontrado no Shodan")
-    response.raise_for_status()
-    return response.json()
+def collect_host_reports(
+    target: str,
+    repository: ShodanRepository,
+    timeout: int = DEFAULT_TIMEOUT,
+    pause: float = PAUSE_BETWEEN_REQUESTS,
+) -> Tuple[List[HostReport], List[ReportWarning]]:
+    ips = resolve_target(target)
+    ips, domain_warnings = expand_ips_with_shodan_domain_data(target, ips, repository, timeout)
+    host_reports: List[HostReport] = []
+    warnings: List[ReportWarning] = domain_warnings
+    for idx, ip in enumerate(ips, start=1):
+        try:
+            host_reports.append(repository.fetch_host_report(ip, timeout))
+        except ValueError as not_found:
+            warnings.append(ReportWarning(ip=ip, kind="not_found", detail=str(not_found)))
+        except requests.Timeout:
+            warnings.append(ReportWarning(ip=ip, kind="timeout"))
+        except requests.HTTPError as http_err:
+            status = http_err.response.status_code if http_err.response else None
+            if status == 429:
+                warnings.append(ReportWarning(ip=ip, kind="rate_limit", detail=str(status)))
+                time.sleep(5)
+                continue
+            warnings.append(
+                ReportWarning(ip=ip, kind="http", detail=str(status or http_err))
+            )
+        except requests.RequestException:
+            warnings.append(ReportWarning(ip=ip, kind="network"))
 
-
-def normalize_references(value: Any) -> List[str]:
-    if not value:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list):
-        return [str(item) for item in value]
-    return [str(value)]
-
-
-def build_vuln_detail(identifier: str, data: Any) -> VulnerabilityDetail:
-    if isinstance(data, dict):
-        return VulnerabilityDetail(
-            cve=identifier,
-            cvss=data.get("cvss"),
-            verified=data.get("verified"),
-            references=normalize_references(
-                data.get("references") or data.get("ref") or data.get("urls")
-            ),
-        )
-    return VulnerabilityDetail(identifier)
-
-
-def extract_vulns(raw: Any) -> List[VulnerabilityDetail]:
-    findings: List[VulnerabilityDetail] = []
-    if not raw:
-        return findings
-    if isinstance(raw, dict):
-        for identifier, data in raw.items():
-            findings.append(build_vuln_detail(str(identifier), data))
-        return findings
-    if isinstance(raw, list):
-        for entry in raw:
-            if isinstance(entry, str):
-                findings.append(VulnerabilityDetail(entry))
-            elif isinstance(entry, dict):
-                identifier = str(entry.get("cve") or entry.get("id") or "VULN")
-                findings.append(build_vuln_detail(identifier, entry))
-            else:
-                findings.append(VulnerabilityDetail(str(entry)))
-        return findings
-    return [VulnerabilityDetail(str(raw))]
+        if idx < len(ips) and pause > 0:
+            time.sleep(pause)
+    return host_reports, warnings
 
 
 def cvss_score(value: float | str | None) -> float:
@@ -416,6 +255,68 @@ def collect_all_vulns(host: HostReport) -> List[VulnerabilityDetail]:
 
 def rgb_to_hex(color: tuple[int, int, int]) -> str:
     return "#%02x%02x%02x" % color
+
+
+class ReportPDF(FPDF):
+    PAGE_BG = (247, 249, 252)
+    HEADER_BG = (21, 35, 55)
+    SECTION_BG = (227, 233, 242)
+    CARD_BG = (255, 255, 255)
+    CHIP_BG = (236, 240, 247)
+    ACCENT = (28, 99, 189)
+    TEXT_PRIMARY = (24, 32, 45)
+    TEXT_MUTED = (110, 118, 138)
+    BORDER_COLOR = (210, 216, 228)
+    SEVERITY_COLORS = {
+        "CRITICAL": (179, 38, 30),
+        "HIGH": (227, 119, 15),
+        "MEDIUM": (210, 155, 0),
+        "LOW": (25, 118, 210),
+        "INFO": (85, 139, 47),
+    }
+    BRAND_TITLE = "Surface vulnerability report"
+
+    def __init__(self, brand_title: str | None = None) -> None:
+        super().__init__(orientation="P", unit="mm", format="A4")
+        self.brand_title = brand_title or self.BRAND_TITLE
+        self.header_height = 28
+        self.header_enabled = True
+        # Margens e quebra automática definem o layout base (mude aqui para espaçamentos globais)
+        self.set_margins(20, 28, 20)
+        self.set_auto_page_break(auto=True, margin=25)
+
+    def header(self) -> None:  # pragma: no cover - visual helper
+        if not getattr(self, "header_enabled", True):
+            return
+        # Fundo geral e barra superior – cobertura separada evita sobreposição visual
+        body_height = max(self.h - self.header_height, 0)
+        self.set_fill_color(*self.PAGE_BG)
+        self.rect(0, self.header_height, self.w, body_height, "F")
+        self.set_fill_color(*self.HEADER_BG)
+        self.rect(0, 0, self.w, self.header_height, "F")
+        self.set_text_color(255, 255, 255)
+        self.set_xy(self.l_margin, 8)
+        self.set_font("Helvetica", "B", 18)
+        self.cell(0, 10, self.brand_title, align="L")
+        self.ln(8)
+        # Garante que todo conteúdo da página comece abaixo do cabeçalho
+        self.set_y(self.header_height + 8)
+
+    def section_title(self, title: str, width: float, uppercase: bool = True) -> None:
+        # Cabeçalho de cada seção – altere preenchimento/tipografia para um look diferente
+        text = title.upper() if uppercase else title
+        self.set_fill_color(*self.SECTION_BG)
+        self.set_text_color(*self.TEXT_PRIMARY)
+        self.set_font("Helvetica", "B", 13)
+        self.cell(
+            width,
+            9,
+            text,
+            fill=True,
+            new_x=XPos.LMARGIN,
+            new_y=YPos.NEXT,
+        )
+        self.ln(2)
 
 
 def create_bar_chart(
@@ -554,96 +455,9 @@ def create_vuln_severity_chart(host: HostReport, chart_paths: List[str]) -> str 
     return tmp.name
 
 
-def fetch_host_report(ip: str, api_key: str, timeout: int) -> HostReport:
-    payload = shodan_request(f"/shodan/host/{ip}", api_key, timeout)
-    services: List[ServiceInfo] = []
-    for entry in payload.get("data", []):
-        service = ServiceInfo(
-            port=entry.get("port"),
-            transport=(entry.get("transport") or "").upper(),
-            product=entry.get("product"),
-            version=entry.get("version"),
-            cpe=entry.get("cpe", []) or [],
-            tags=entry.get("tags", []) or [],
-            vulns=extract_vulns(entry.get("vulns")),
-            info=(entry.get("info") or entry.get("_shodan", {}).get("module")),
-        )
-        services.append(service)
-
-    location_parts = [
-        payload.get("city"),
-        payload.get("region_code"),
-        payload.get("country_name"),
-    ]
-    location = ", ".join(part for part in location_parts if part)
-
-    host_report = HostReport(
-        ip=payload.get("ip_str", ip),
-        hostnames=payload.get("hostnames", []) or [],
-        org=payload.get("org"),
-        isp=payload.get("isp"),
-        os=payload.get("os"),
-        location=location or None,
-        open_ports=sorted(payload.get("ports", [])),
-        tags=payload.get("tags", []) or [],
-        vulns=extract_vulns(payload.get("vulns")),
-        services=services,
-    )
-
-    return host_report
-
-
-def slugify(value: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip())
-    return safe.strip("-_.") or "alvo"
-
-
-def classify_target_label(targets: Sequence[str]) -> str:
-    """
-    Define o prefixo do arquivo com base na quantidade e no tipo dos alvos.
-    """
-    if not targets:
-        return "relatorio-alvo"
-    if len(targets) == 1:
-        target = targets[0]
-        if "/" in target:
-            network, _, cidr = target.partition("/")
-            return f"relatorio-{slugify(network)}-{cidr or 'cidr'}"
-        if is_ip(target):
-            return f"relatorio-{slugify(target)}"
-        return f"relatorio-{slugify(target)}"
-
-    # múltiplos alvos
-    all_ips = all(is_ip(item) and "/" not in item for item in targets)
-    all_blocks = all("/" in item for item in targets)
-    all_domains = all(not is_ip(item.split("/")[0]) and "/" not in item for item in targets)
-
-    if all_ips:
-        return "relatorio-ips"
-    if all_blocks:
-        return "relatorio-blocos"
-    if all_domains:
-        return "relatorio-dominios"
-    return "relatorio-alvos"
-
-
-def default_output_name(targets: Sequence[str]) -> str:
-    """
-    Gera o nome final do PDF com base em todos os alvos recebidos.
-    """
-    prefix = classify_target_label(targets)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return f"{prefix}-{timestamp}.pdf"
-
-
-def list_to_text(values: Sequence[str]) -> str | None:
-    if not values:
-        return None
-    return ", ".join(values)
-
-
-def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
-    pdf = ReportPDF()
+def render_pdf_bytes(target: str, hosts: List[HostReport], company: str | None = None) -> bytes:
+    brand_name = (company or "SurfaceLens").strip() or "SurfaceLens"
+    pdf = ReportPDF(brand_title=f"{brand_name} surface vulnerability report")
     chart_paths: List[str] = []
     generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
 
@@ -657,11 +471,11 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
         pdf.set_xy(pdf.l_margin, 60)
         cover_width = pdf.w - pdf.l_margin - pdf.r_margin
         pdf.set_font("Helvetica", size=14)
-        pdf.cell(cover_width, 8, "NetSafe MDR | Relatório executivo", ln=1)
+        pdf.cell(cover_width, 8, f"{brand_name} | Relatório executivo", ln=1)
         pdf.ln(8)
         pdf.set_font("Helvetica", "B", 34)
-        pdf.cell(cover_width, 16, "NETSAFE SURFACE", ln=1)
-        pdf.cell(cover_width, 16, "VULNERABILITY REPORT", ln=1)
+        pdf.cell(cover_width, 16, brand_name.upper(), ln=1)
+        pdf.cell(cover_width, 16, "SURFACE VULNERABILITY REPORT", ln=1)
         pdf.ln(6)
         pdf.set_draw_color(255, 255, 255)
         pdf.set_line_width(0.5)
@@ -690,13 +504,13 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
         pdf.set_xy(pdf.l_margin, 35)
         context_width = pdf.w - pdf.l_margin - pdf.r_margin
         pdf.set_font("Helvetica", "B", 20)
-        pdf.multi_cell(context_width, 10, "Contra capa")
+        # pdf.multi_cell(context_width, 10, "Contra capa")
         pdf.ln(4)
         sections = [
             (
                 "1. Introdução",
                 [
-                    "Atravéz do serviço de MDR da NetSafe, apresentamos este relatório com uma análise da superfície de ataque da organização, identificando vulnerabilidades cibernéticas que podem ser exploradas por agentes maliciosos. O objetivo é avaliar riscos, priorizar correções e fortalecer a postura de segurança.",
+                    "Apresentamos este relatório com uma análise da superfície de ataque da organização, identificando vulnerabilidades cibernéticas que podem ser exploradas por agentes maliciosos. O objetivo é avaliar riscos, priorizar correções e fortalecer a postura de segurança.",
                     "A superfície de ataque é o conjunto de todos os pontos de entrada potenciais que um invasor pode utilizar para comprometer sistemas, redes e aplicações.",
                 ],
             ),
@@ -719,13 +533,10 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
             pdf.ln(3)
         pdf.header_enabled = original_header
 
-    render_cover_page()
-    render_context_page()
-
-    pdf.header_enabled = True
-    pdf.add_page()
-    content_width = pdf.w - pdf.l_margin - pdf.r_margin
-    pdf.set_text_color(*pdf.TEXT_PRIMARY)
+    def list_to_text(values: Sequence[str]) -> str | None:
+        if not values:
+            return None
+        return ", ".join(values)
 
     def write_info_block(
         items: List[tuple[str, str | None, tuple[int, int, int] | None]],
@@ -855,6 +666,14 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
                 write_service_details(service)
         pdf.ln(2)
 
+    render_cover_page()
+    render_context_page()
+
+    pdf.header_enabled = True
+    pdf.add_page()
+    content_width = pdf.w - pdf.l_margin - pdf.r_margin
+    pdf.set_text_color(*pdf.TEXT_PRIMARY)
+
     pdf.ln(4)
     pdf.section_title("Resumo do alvo", content_width)
     summary_items = [
@@ -897,38 +716,47 @@ def render_pdf_bytes(target: str, hosts: List[HostReport]) -> bytes:
     return output_bytes
 
 
-def collect_host_reports(
-    target: str,
-    api_key: str,
-    timeout: int = DEFAULT_TIMEOUT,
-    pause: float = PAUSE_BETWEEN_REQUESTS,
-) -> Tuple[List[HostReport], List[ReportWarning]]:
-    ips = resolve_target(target)
-    ips, domain_warnings = expand_ips_with_shodan_domain_data(target, ips, api_key, timeout)
-    host_reports: List[HostReport] = []
-    warnings: List[ReportWarning] = domain_warnings
-    for idx, ip in enumerate(ips, start=1):
-        try:
-            host_reports.append(fetch_host_report(ip, api_key, timeout))
-        except ValueError as not_found:
-            warnings.append(ReportWarning(ip=ip, kind="not_found", detail=str(not_found)))
-        except requests.Timeout:
-            warnings.append(ReportWarning(ip=ip, kind="timeout"))
-        except requests.HTTPError as http_err:
-            status = http_err.response.status_code if http_err.response else None
-            if status == 429:
-                warnings.append(ReportWarning(ip=ip, kind="rate_limit", detail=str(status)))
-                time.sleep(5)
-                continue
-            warnings.append(
-                ReportWarning(ip=ip, kind="http", detail=str(status or http_err))
-            )
-        except requests.RequestException:
-            warnings.append(ReportWarning(ip=ip, kind="network"))
+def slugify(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip())
+    return safe.strip("-_.") or "alvo"
 
-        if idx < len(ips) and pause > 0:
-            time.sleep(pause)
-    return host_reports, warnings
+
+def classify_target_label(targets: Sequence[str]) -> str:
+    """
+    Define o prefixo do arquivo com base na quantidade e no tipo dos alvos.
+    """
+    if not targets:
+        return "relatorio-alvo"
+    if len(targets) == 1:
+        target = targets[0]
+        if "/" in target:
+            network, _, cidr = target.partition("/")
+            return f"relatorio-{slugify(network)}-{cidr or 'cidr'}"
+        if is_ip(target):
+            return f"relatorio-{slugify(target)}"
+        return f"relatorio-{slugify(target)}"
+
+    # múltiplos alvos
+    all_ips = all(is_ip(item) and "/" not in item for item in targets)
+    all_blocks = all("/" in item for item in targets)
+    all_domains = all(not is_ip(item.split("/")[0]) and "/" not in item for item in targets)
+
+    if all_ips:
+        return "relatorio-ips"
+    if all_blocks:
+        return "relatorio-blocos"
+    if all_domains:
+        return "relatorio-dominios"
+    return "relatorio-alvos"
+
+
+def default_output_name(targets: Sequence[str]) -> str:
+    """
+    Gera o nome final do PDF com base em todos os alvos recebidos.
+    """
+    prefix = classify_target_label(targets)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return f"{prefix}-{timestamp}.pdf"
 
 
 def warning_message_text(warning: ReportWarning, verbose: bool = False) -> str:
