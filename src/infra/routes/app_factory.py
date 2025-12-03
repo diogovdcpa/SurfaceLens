@@ -42,7 +42,9 @@ def create_app() -> Flask:
         reports_dir.mkdir(parents=True, exist_ok=True)
 
     default_api_key = os.getenv("SHODAN_API_KEY")
-    use_history = os.getenv("USE_SHODAN_HISTORY", "").lower() == "true"
+    # Histórico ligado por padrão; defina USE_SHODAN_HISTORY=false para desativar
+    env_history = os.getenv("USE_SHODAN_HISTORY")
+    use_history = True if env_history is None else env_history.lower() == "true"
     web_bp = build_web_blueprint(
         reports_dir=reports_dir,
         default_api_key=default_api_key,
