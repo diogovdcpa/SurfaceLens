@@ -20,6 +20,7 @@ from application.use_cases.report_generation import (
     default_output_name,
     load_api_key,
     normalize_targets,
+    render_html_report,
     render_pdf_bytes,
 )
 from domain.repository import ShodanRepository
@@ -100,15 +101,17 @@ def build_web_blueprint(
 
         target_label = ", ".join(targets)
         pdf_bytes = render_pdf_bytes(target_label, aggregated_reports, company=company)
-        filename = default_output_name(targets)
-        file_path = reports_dir / filename
-        file_path.write_bytes(pdf_bytes)
-        return send_file(
-            file_path,
-            mimetype="application/pdf",
-            as_attachment=True,
-            download_name=filename,
-        )
+        html_content = render_html_report(target_label, aggregated_reports, company=company)
+        pdf_filename = default_output_name(targets)
+        base_name = pdf_filename.rsplit(".", 1)[0]
+        html_filename = f"{base_name}.html"
+        file_path_pdf = reports_dir / pdf_filename
+        file_path_html = reports_dir / html_filename
+        file_path_pdf.write_bytes(pdf_bytes)
+        file_path_html.write_text(html_content, encoding="utf-8")
+
+        flash("Relatórios gerados com sucesso (PDF e HTML).", "success")
+        return redirect(url_for("web.index"))
 
     @bp.get("/reports/<path:filename>")
     def download_report(filename: str):
@@ -119,13 +122,17 @@ def build_web_blueprint(
             return redirect(url_for("web.index"))
         return send_from_directory(reports_dir, filename, as_attachment=True)
 
-    @bp.post("/reports/<path:filename>/delete")
-    def delete_report(filename: str):
-        target_path = (reports_dir / filename).resolve()
+    @bp.post("/reports/<path:basename>/delete")
+    def delete_report_set(basename: str):
         reports_root = reports_dir.resolve()
-        if target_path.is_file() and reports_root in target_path.parents:
-            target_path.unlink()
-            flash(f"Relatório {filename} removido.", "warning")
+        removed = False
+        for ext in (".pdf", ".html"):
+            target_path = (reports_dir / f"{basename}{ext}").resolve()
+            if target_path.is_file() and reports_root in target_path.parents:
+                target_path.unlink()
+                removed = True
+        if removed:
+            flash(f"Conjunto {basename} removido.", "warning")
         else:
             flash("Relatório não encontrado.", "error")
         return redirect(url_for("web.index"))
