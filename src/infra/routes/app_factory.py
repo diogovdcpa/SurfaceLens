@@ -42,10 +42,12 @@ def create_app() -> Flask:
         reports_dir.mkdir(parents=True, exist_ok=True)
 
     default_api_key = os.getenv("SHODAN_API_KEY")
+    use_history = os.getenv("USE_SHODAN_HISTORY", "").lower() == "true"
     web_bp = build_web_blueprint(
         reports_dir=reports_dir,
         default_api_key=default_api_key,
         repository_factory=ShodanAPIRepository,
+        use_history=use_history,
     )
     app.register_blueprint(web_bp)
     return app

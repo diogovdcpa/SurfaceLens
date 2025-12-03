@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import requests
 
 from domain.entity import HostReport, ServiceInfo, VulnerabilityDetail
@@ -52,6 +53,50 @@ def extract_vulns(raw) -> list[VulnerabilityDetail]:
     return [VulnerabilityDetail(str(raw))]
 
 
+def parse_month(value) -> str | None:
+    if not value:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            dt = datetime.fromtimestamp(float(value), tz=timezone.utc)
+        elif isinstance(value, str):
+            # Normaliza timestamps do Shodan, ex: 2025-01-02T12:00:00.000000
+            clean = value.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(clean)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            return None
+        return dt.strftime("%Y-%m")
+    except Exception:
+        return None
+
+
+def build_history_trend(entries: list[dict]) -> dict[str, list[int]] | None:
+    monthly_ports: dict[str, set[int]] = {}
+    monthly_cves: dict[str, int] = {}
+
+    for entry in entries or []:
+        month = parse_month(entry.get("timestamp"))
+        if not month:
+            continue
+        monthly_ports.setdefault(month, set())
+        monthly_cves.setdefault(month, 0)
+        port = entry.get("port")
+        if port:
+            monthly_ports[month].add(port)
+        for _ in extract_vulns(entry.get("vulns")):
+            monthly_cves[month] += 1
+
+    all_months = sorted(set(monthly_ports.keys()) | set(monthly_cves.keys()))
+    if not all_months:
+        return None
+    labels = all_months
+    ports = [len(monthly_ports.get(month, set())) for month in labels]
+    cves = [monthly_cves.get(month, 0) for month in labels]
+    return {"labels": labels, "ports": ports, "cves": cves}
+
+
 class ShodanAPIRepository(ShodanRepository):
     """
     Implementação que consulta a API oficial do Shodan.
@@ -60,10 +105,12 @@ class ShodanAPIRepository(ShodanRepository):
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
 
-    def shodan_request(self, path: str, timeout: int):
+    def shodan_request(self, path: str, timeout: int, params: dict | None = None):
         url = f"{API_BASE_URL}{path}"
-        params = {"key": self.api_key}
-        response = requests.get(url, params=params, timeout=timeout)
+        merged_params = {"key": self.api_key}
+        if params:
+            merged_params.update(params)
+        response = requests.get(url, params=merged_params, timeout=timeout)
         if response.status_code == 404:
             raise ValueError("Alvo não encontrado no Shodan")
         response.raise_for_status()
@@ -98,8 +145,9 @@ class ShodanAPIRepository(ShodanRepository):
             ips.append(str(value))
         return ips, None
 
-    def fetch_host_report(self, ip: str, timeout: int) -> HostReport:
-        payload = self.shodan_request(f"/shodan/host/{ip}", timeout)
+    def fetch_host_report(self, ip: str, timeout: int, include_history: bool = False) -> HostReport:
+        params = {"history": "true"} if include_history else None
+        payload = self.shodan_request(f"/shodan/host/{ip}", timeout, params=params)
         services: list[ServiceInfo] = []
         for entry in payload.get("data", []):
             service = ServiceInfo(
@@ -132,6 +180,7 @@ class ShodanAPIRepository(ShodanRepository):
             tags=payload.get("tags", []) or [],
             vulns=extract_vulns(payload.get("vulns")),
             services=services,
+            history_trend=build_history_trend(payload.get("data", [])) if include_history else None,
         )
 
         return host_report
