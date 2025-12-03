@@ -1,5 +1,5 @@
 [project]
-name = "gen-shodan"
+name = "SurfaceLens"
 version = "0.1.0"
 description = "Ferramenta CLI para consultar a API do Shodan e gerar relatórios em PDF"
 readme = "README.md"
