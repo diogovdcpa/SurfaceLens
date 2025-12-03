@@ -67,7 +67,7 @@ O PDF inclui:
 - Para cada IP retornado pelo Shodan: hostnames, organização, ISP, sistema operacional, localização, tags e portas abertas.
 - Listagem detalhada dos serviços expostos, com produto, versão, CPEs, tags e vulnerabilidades reportadas pela API.
 
-Os arquivos são salvos no diretório configurado em `REPORTS_DIR`.
+Os arquivos são salvos no diretório configurado em `REPORTS_DIR`. Cada execução gera um PDF e um HTML pronto para impressão (A4) no mesmo diretório.
 
 ## Dicas
 
