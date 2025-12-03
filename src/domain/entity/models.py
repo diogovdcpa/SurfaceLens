@@ -36,6 +36,7 @@ class HostReport:
     tags: List[str]
     vulns: List[VulnerabilityDetail]
     services: List[ServiceInfo]
+    history_trend: dict[str, list[int]] | None = None
 
 
 @dataclass

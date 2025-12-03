@@ -132,6 +132,7 @@ def collect_host_reports(
     target: str,
     repository: ShodanRepository,
     timeout: int = DEFAULT_TIMEOUT,
+    include_history: bool = False,
     pause: float = PAUSE_BETWEEN_REQUESTS,
 ) -> Tuple[List[HostReport], List[ReportWarning]]:
     ips = resolve_target(target)
@@ -140,7 +141,7 @@ def collect_host_reports(
     warnings: List[ReportWarning] = domain_warnings
     for idx, ip in enumerate(ips, start=1):
         try:
-            host_reports.append(repository.fetch_host_report(ip, timeout))
+            host_reports.append(repository.fetch_host_report(ip, timeout, include_history=include_history))
         except ValueError as not_found:
             warnings.append(ReportWarning(ip=ip, kind="not_found", detail=str(not_found)))
         except requests.Timeout:
@@ -833,6 +834,9 @@ def render_html_report(target: str, hosts: List[HostReport], company: str | None
         host_sev_counts = severity_counts_for_host(host)
         host_chart_id = f"chart-host-{idx}"
         host_sev_id = f"chart-host-sev-{idx}"
+        trend_data = host.history_trend or {}
+        trend_labels = trend_data.get("labels") or []
+        trend_id = f"chart-host-trend-{idx}" if trend_labels else None
         host_chart_data.append(
             {
                 "chartId": host_chart_id,
@@ -842,15 +846,23 @@ def render_html_report(target: str, hosts: List[HostReport], company: str | None
                 "severityLabels": severity_labels_pt,
                 "severityValues": [host_sev_counts.get(key, 0) for key in severity_keys],
                 "severityColors": severity_colors,
+                "trend": {
+                    "id": trend_id,
+                    "labels": trend_labels,
+                    "ports": trend_data.get("ports") or [],
+                    "cves": trend_data.get("cves") or [],
+                }
+                if trend_id
+                else None,
             }
         )
 
-        charts_html = f"""
-        <div class='chart-grid'>
-          <div class="chart-card"><canvas id='{host_chart_id}' aria-label='Resumo do host'></canvas></div>
-          <div class="chart-card"><canvas id='{host_sev_id}' aria-label='Severidade do host'></canvas></div>
-        </div>
-        """
+        charts_html = "<div class='chart-grid'>"
+        charts_html += f"<div class=\"chart-card\"><canvas id='{host_chart_id}' aria-label='Resumo do host'></canvas></div>"
+        charts_html += f"<div class=\"chart-card\"><canvas id='{host_sev_id}' aria-label='Severidade do host'></canvas></div>"
+        if trend_id:
+            charts_html += f"<div class=\"chart-card\"><canvas id='{trend_id}' aria-label='Tendência histórica do host'></canvas></div>"
+        charts_html += "</div>"
 
         host_sections.append(
             f"""
@@ -1071,12 +1083,63 @@ def render_html_report(target: str, hosts: List[HostReport], company: str | None
       }});
     }}
 
+    function renderLine(id, labels, datasets) {{
+      const ctx = document.getElementById(id);
+      if (!ctx) return;
+      new Chart(ctx, {{
+        type: 'line',
+        data: {{
+          labels,
+          datasets: datasets.map(ds => ({{
+            label: ds.label,
+            data: ds.data,
+            borderColor: ds.color,
+            backgroundColor: ds.color + '33',
+            fill: false,
+            tension: 0.3,
+            pointRadius: 3,
+            pointHoverRadius: 4,
+            borderWidth: 2,
+          }})),
+        }},
+        options: {{
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {{
+            legend: {{ position: 'bottom', labels: {{ color: '#f9f5f3' }} }},
+            tooltip: {{
+              backgroundColor: '#1b0f14',
+              borderColor: '#2a1820',
+              borderWidth: 1,
+            }},
+          }},
+          scales: {{
+            x: {{
+              grid: {{ color: 'rgba(255,255,255,0.08)' }},
+              ticks: {{ color: '#f9f5f3' }},
+            }},
+            y: {{
+              beginAtZero: true,
+              grid: {{ color: 'rgba(255,255,255,0.08)' }},
+              ticks: {{ color: '#f9f5f3' }},
+            }},
+          }},
+        }},
+      }});
+    }}
+
     window.addEventListener('DOMContentLoaded', () => {{
       renderBar('chart-summary', chartData.summary.labels, chartData.summary.values, colorPalette);
       renderDoughnut('chart-severity-global', chartData.globalSeverity.labels, chartData.globalSeverity.values, chartData.globalSeverity.colors);
       chartData.hosts.forEach((host) => {{
         renderBar(host.chartId, host.labels, host.values, colorPalette.slice(0, host.labels.length));
         renderDoughnut(host.severityId, host.severityLabels, host.severityValues, host.severityColors);
+        if (host.trend && host.trend.labels && host.trend.labels.length) {{
+          renderLine(host.trend.id, host.trend.labels, [
+            {{ label: 'Portas', data: host.trend.ports, color: colorPalette[0] }},
+            {{ label: 'CVEs', data: host.trend.cves, color: colorPalette[1] }},
+          ]);
+        }}
       }});
     }});
   </script>

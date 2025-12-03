@@ -32,6 +32,7 @@ def build_web_blueprint(
     reports_dir: Path,
     default_api_key: str | None = None,
     repository_factory: type[ShodanRepository] = ShodanAPIRepository,
+    use_history: bool = False,
 ) -> Blueprint:
     """
     Cria um blueprint Flask com as rotas web.
@@ -80,7 +81,7 @@ def build_web_blueprint(
         repository = repository_factory(api_key)  # type: ignore[call-arg]
         try:
             for individual in targets:
-                reports, warnings = collect_host_reports(individual, repository, timeout)
+                reports, warnings = collect_host_reports(individual, repository, timeout, include_history=use_history)
                 aggregated_reports.extend(reports)
                 aggregated_warnings.extend(warnings)
         except RuntimeError as exc:

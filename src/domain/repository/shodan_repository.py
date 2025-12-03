@@ -11,7 +11,7 @@ class ShodanRepository(Protocol):
     Implementações podem usar API HTTP, mocks ou caches locais.
     """
 
-    def fetch_host_report(self, ip: str, timeout: int) -> HostReport:
+    def fetch_host_report(self, ip: str, timeout: int, include_history: bool = False) -> HostReport:
         ...
 
     def fetch_domain_history(self, domain: str, timeout: int) -> tuple[list[str], str | None]:
