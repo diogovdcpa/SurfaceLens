@@ -112,6 +112,36 @@ def build_history_trend(entries: list[dict]) -> dict[str, list[int]] | None:
     return {"labels": labels, "ports": ports, "cves": cves}
 
 
+def build_history_detail(entries: list[dict]) -> list[dict[str, object]] | None:
+    """
+    Retorna uma lista ordenada por mês com portas e CVEs observados naquele snapshot.
+    """
+    buckets: dict[str, dict[str, object]] = {}
+    for entry in entries or []:
+        month = parse_month(entry.get("timestamp"))
+        if not month:
+            continue
+        bucket = buckets.setdefault(month, {"period": month, "ports": set(), "cves": set()})
+        port = entry.get("port")
+        if port:
+            bucket["ports"].add(port)
+        for vuln in extract_vulns(entry.get("vulns")):
+            bucket["cves"].add(vuln.cve)
+    if not buckets:
+        return None
+    ordered = []
+    for period in sorted(buckets.keys(), reverse=True):
+        data = buckets[period]
+        ordered.append(
+            {
+                "period": period,
+                "ports": sorted(data["ports"]),
+                "cves": sorted(data["cves"]),
+            }
+        )
+    return ordered
+
+
 def select_latest_services(entries: list[dict]) -> list[dict]:
     """
     Quando history=true, o Shodan devolve snapshots antigos em payload['data'].
@@ -220,6 +250,7 @@ class ShodanAPIRepository(ShodanRepository):
             vulns=extract_vulns(payload.get("vulns")),
             services=services,
             history_trend=build_history_trend(payload.get("data", [])) if include_history else None,
+            history_detail=build_history_detail(payload.get("data", [])) if include_history else None,
         )
 
         return host_report

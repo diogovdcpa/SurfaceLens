@@ -37,6 +37,7 @@ class HostReport:
     vulns: List[VulnerabilityDetail]
     services: List[ServiceInfo]
     history_trend: dict[str, list[int]] | None = None
+    history_detail: list[dict[str, object]] | None = None
 
 
 @dataclass

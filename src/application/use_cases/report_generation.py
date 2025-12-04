@@ -630,10 +630,10 @@ def render_pdf_bytes(target: str, hosts: List[HostReport], company: str | None =
             ("Tags", list_to_text(host.tags), None),
         ]
         if host.open_ports:
-            details.append(("Portas abertas", ", ".join(str(p) for p in host.open_ports), None))
+            details.append(("Portas abertas (agora)", ", ".join(str(p) for p in host.open_ports), None))
         all_vulns = collect_all_vulns(host)
         if all_vulns:
-            details.append(("Vulnerabilidades", summarize_total_vulns(all_vulns), None))
+            details.append(("Vulnerabilidades (agora)", summarize_total_vulns(all_vulns), None))
         if not any(value for _, value, _ in details):
             details.append(("Informações", "Nenhum metadado divulgado pelo Shodan.", None))
 
@@ -680,6 +680,7 @@ def render_pdf_bytes(target: str, hosts: List[HostReport], company: str | None =
         ("Alvo solicitado", target, None),
         ("Data de geração", generated_at, None),
         ("Hosts encontrados", str(len(hosts)), None),
+        ("Modo histórico", "Ativado" if any(host.history_detail for host in hosts) else "Desativado", None),
     ]
     write_info_block(summary_items, multiline=False)
     summary_chart = create_summary_chart(hosts, chart_paths)
@@ -864,6 +865,26 @@ def render_html_report(target: str, hosts: List[HostReport], company: str | None
             charts_html += f"<div class=\"chart-card\"><canvas id='{trend_id}' aria-label='Tendência histórica do host'></canvas></div>"
         charts_html += "</div>"
 
+        history_html = ""
+        if host.history_detail:
+            rows = []
+            for item in host.history_detail:
+                ports_text = ", ".join(str(p) for p in item.get("ports", [])) if item.get("ports") else "—"
+                cves_text = ", ".join(html.escape(c) for c in item.get("cves", [])) if item.get("cves") else "—"
+                rows.append(
+                    f"<div class='history-row'>"
+                    f"<div class='history-period'>{html.escape(str(item.get('period') or ''))}</div>"
+                    f"<div class='history-ports'><strong>Portas:</strong> {ports_text}</div>"
+                    f"<div class='history-cves'><strong>CVEs:</strong> {cves_text}</div>"
+                    f"</div>"
+                )
+            history_html = (
+                "<div class=\"section-subtitle\">Histórico detalhado (portas e CVEs por mês)</div>"
+                "<div class=\"history-table\">"
+                + "".join(rows)
+                + "</div>"
+            )
+
         host_sections.append(
             f"""
             <section class="host-section">
@@ -872,6 +893,7 @@ def render_html_report(target: str, hosts: List[HostReport], company: str | None
               {charts_html}
               <div class="section-subtitle">Serviços expostos</div>
               {'<div class="services-grid">' + ''.join(service_blocks) + '</div>' if service_blocks else '<p class="muted">Nenhum serviço retornado.</p>'}
+              {history_html}
             </section>
             """
         )
@@ -978,6 +1000,13 @@ def render_html_report(target: str, hosts: List[HostReport], company: str | None
     .vuln-severity {{ margin: 2px 0; }}
     .vuln-entry {{ background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 13px; }}
     .muted {{ color: var(--muted); }}
+    .history-table {{ display: grid; gap: 8px; margin-top: 12px; }}
+    .history-row {{ display: grid; grid-template-columns: 1fr 2fr 2fr; gap: 8px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }}
+    .history-period {{ font-weight: 700; }}
+    .history-ports, .history-cves {{ font-size: 13px; }}
+    @media (max-width: 768px) {{
+      .history-row {{ grid-template-columns: 1fr; }}
+    }}
     @media print {{
       body {{ background: #fff; color: #111827; }}
       .hero, .card, .host-section, .service-card {{ box-shadow: none; background: #fff; border-color: #e5e7eb; }}
@@ -1136,8 +1165,8 @@ def render_html_report(target: str, hosts: List[HostReport], company: str | None
         renderDoughnut(host.severityId, host.severityLabels, host.severityValues, host.severityColors);
         if (host.trend && host.trend.labels && host.trend.labels.length) {{
           renderLine(host.trend.id, host.trend.labels, [
-            {{ label: 'Portas', data: host.trend.ports, color: colorPalette[0] }},
-            {{ label: 'CVEs', data: host.trend.cves, color: colorPalette[1] }},
+            {{ label: 'Portas (histórico)', data: host.trend.ports, color: colorPalette[0] }},
+            {{ label: 'CVEs (histórico)', data: host.trend.cves, color: colorPalette[1] }},
           ]);
         }}
       }});
