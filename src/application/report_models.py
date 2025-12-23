@@ -13,6 +13,8 @@ class ReportHost:
     all_vulns: List[VulnerabilityDetail]
     severity_counts: Dict[str, int]
     unique_ports: int
+    recent_vulns: List[VulnerabilityDetail]
+    recent_severity_counts: Dict[str, int]
 
 
 @dataclass
@@ -21,6 +23,8 @@ class ReportSummary:
     total_ports: int
     total_vulns: int
     severity_global: Dict[str, int]
+    total_vulns_24h: int
+    severity_24h: Dict[str, int]
     history_enabled: bool
 
 

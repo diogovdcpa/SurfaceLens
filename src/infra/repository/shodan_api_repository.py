@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -15,6 +15,9 @@ from domain.errors import (
 from domain.repository import ShodanRepository
 
 API_BASE_URL = "https://api.shodan.io"
+HISTORY_YEARS = 3
+RECENT_HOURS = 24
+SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")
 
 
 def normalize_references(value) -> list[str]:
@@ -95,14 +98,54 @@ def parse_timestamp(value) -> datetime | None:
     return None
 
 
+def cvss_score(value: float | str | None) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def severity_from_cvss(score: float) -> str:
+    if score >= 9.0:
+        return "CRITICAL"
+    if score >= 7.0:
+        return "HIGH"
+    if score >= 4.0:
+        return "MEDIUM"
+    if score > 0:
+        return "LOW"
+    return "INFO"
+
+
+def within_history_window(timestamp: datetime, cutoff: datetime) -> bool:
+    return timestamp >= cutoff
+
+
+def build_recent_vulns(entries: list[dict], cutoff: datetime) -> list[VulnerabilityDetail]:
+    recent: dict[str, VulnerabilityDetail] = {}
+    for entry in entries or []:
+        timestamp = parse_timestamp(entry.get("timestamp"))
+        if not timestamp or timestamp < cutoff:
+            continue
+        for vuln in extract_vulns(entry.get("vulns")):
+            recent.setdefault(vuln.cve, vuln)
+    return list(recent.values())
+
+
 def build_history_trend(entries: list[dict]) -> dict[str, list[int]] | None:
     monthly_ports: dict[str, set[int]] = {}
     monthly_cves: dict[str, int] = {}
+    cutoff = datetime.now(timezone.utc) - timedelta(days=365 * HISTORY_YEARS)
 
     for entry in entries or []:
-        month = parse_month(entry.get("timestamp"))
-        if not month:
+        timestamp = parse_timestamp(entry.get("timestamp"))
+        if not timestamp or not within_history_window(timestamp, cutoff):
             continue
+        month = timestamp.strftime("%Y-%m")
         monthly_ports.setdefault(month, set())
         monthly_cves.setdefault(month, 0)
         port = entry.get("port")
@@ -125,16 +168,28 @@ def build_history_detail(entries: list[dict]) -> list[dict[str, object]] | None:
     Retorna uma lista ordenada por mês com portas e CVEs observados naquele snapshot.
     """
     buckets: dict[str, dict[str, object]] = {}
+    cutoff = datetime.now(timezone.utc) - timedelta(days=365 * HISTORY_YEARS)
     for entry in entries or []:
-        month = parse_month(entry.get("timestamp"))
-        if not month:
+        timestamp = parse_timestamp(entry.get("timestamp"))
+        if not timestamp or not within_history_window(timestamp, cutoff):
             continue
-        bucket = buckets.setdefault(month, {"period": month, "ports": set(), "cves": set()})
+        month = timestamp.strftime("%Y-%m")
+        bucket = buckets.setdefault(
+            month,
+            {
+                "period": month,
+                "ports": set(),
+                "cves": set(),
+                "severity": {level: 0 for level in SEVERITY_ORDER},
+            },
+        )
         port = entry.get("port")
         if port:
             bucket["ports"].add(port)
         for vuln in extract_vulns(entry.get("vulns")):
             bucket["cves"].add(vuln.cve)
+            severity = severity_from_cvss(cvss_score(vuln.cvss))
+            bucket["severity"][severity] = bucket["severity"].get(severity, 0) + 1
     if not buckets:
         return None
     ordered = []
@@ -145,6 +200,7 @@ def build_history_detail(entries: list[dict]) -> list[dict[str, object]] | None:
                 "period": period,
                 "ports": sorted(data["ports"]),
                 "cves": sorted(data["cves"]),
+                "severity": data.get("severity", {}),
             }
         )
     return ordered
@@ -259,6 +315,9 @@ class ShodanAPIRepository(ShodanRepository):
         ]
         location = ", ".join(part for part in location_parts if part)
 
+        recent_cutoff = datetime.now(timezone.utc) - timedelta(hours=RECENT_HOURS)
+        recent_vulns = build_recent_vulns(entries, recent_cutoff)
+
         host_report = HostReport(
             ip=payload.get("ip_str", ip),
             hostnames=payload.get("hostnames", []) or [],
@@ -270,6 +329,7 @@ class ShodanAPIRepository(ShodanRepository):
             tags=payload.get("tags", []) or [],
             vulns=extract_vulns(payload.get("vulns")),
             services=services,
+            recent_vulns=recent_vulns,
             history_trend=build_history_trend(payload.get("data", [])) if include_history else None,
             history_detail=build_history_detail(payload.get("data", [])) if include_history else None,
         )

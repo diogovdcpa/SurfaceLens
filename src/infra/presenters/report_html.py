@@ -33,13 +33,34 @@ def render_html_report(report: ReportModel) -> str:
         }
         return colors.get(sev.upper(), "#374151")
 
+    severity_labels = [
+        ("Crítico", "CRITICAL"),
+        ("Alto", "HIGH"),
+        ("Médio", "MEDIUM"),
+        ("Baixo", "LOW"),
+        ("Info", "INFO"),
+    ]
+
+    def format_severity_counts(counts: Dict[str, int]) -> str | None:
+        parts = []
+        for label, key in severity_labels:
+            value = counts.get(key, 0)
+            if value:
+                parts.append(f"{label}: {value}")
+        return " | ".join(parts) if parts else None
+
+    def format_recent_cves(recent) -> str | None:
+        if not recent:
+            return None
+        return ", ".join(vuln.cve for vuln in recent)
+
     total_hosts = report.summary.total_hosts
     total_ports = report.summary.total_ports
-    total_vulns = report.summary.total_vulns
+    total_vulns_24h = report.summary.total_vulns_24h
 
     host_sections: List[str] = []
     host_chart_data: List[Dict[str, Any]] = []
-    severity_global = report.summary.severity_global
+    severity_global = report.summary.severity_24h
     severity_labels_pt = ["Crítico", "Alto", "Médio", "Baixo"]
     severity_keys = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
     severity_colors = [severity_color(k) for k in severity_keys]
@@ -58,7 +79,11 @@ def render_html_report(report: ReportModel) -> str:
         if host.open_ports:
             info_pairs.append(("Portas abertas", ", ".join(str(p) for p in host.open_ports)))
         if host_item.all_vulns:
-            info_pairs.append(("Vulnerabilidades", f"{len(host_item.all_vulns)}"))
+            info_pairs.append(("Vulnerabilidades (total)", f"{len(host_item.all_vulns)}"))
+        recent_cves = format_recent_cves(host_item.recent_vulns)
+        info_pairs.append(("CVEs (24h)", recent_cves or "Nenhuma nas últimas 24h"))
+        severity_24h_text = format_severity_counts(host_item.recent_severity_counts)
+        info_pairs.append(("Severidade (24h)", severity_24h_text or "Sem dados nas últimas 24h"))
         for label, value in info_pairs:
             if value:
                 details.append(
@@ -112,11 +137,11 @@ def render_html_report(report: ReportModel) -> str:
         host_chart_data.append(
             {
                 "chartId": host_chart_id,
-                "labels": ["Portas", "CVEs"],
-                "values": [host_item.unique_ports, len(host_item.all_vulns)],
+                "labels": ["Portas", "CVEs (24h)"],
+                "values": [host_item.unique_ports, len(host_item.recent_vulns)],
                 "severityId": host_sev_id,
                 "severityLabels": severity_labels_pt,
-                "severityValues": [host_item.severity_counts.get(key, 0) for key in severity_keys],
+                "severityValues": [host_item.recent_severity_counts.get(key, 0) for key in severity_keys],
                 "severityColors": severity_colors,
                 "trend": {
                     "id": trend_id,
@@ -130,8 +155,8 @@ def render_html_report(report: ReportModel) -> str:
         )
 
         charts_html = "<div class='chart-grid'>"
-        charts_html += f"<div class=\"chart-card\"><canvas id='{host_chart_id}' aria-label='Resumo do host'></canvas></div>"
-        charts_html += f"<div class=\"chart-card\"><canvas id='{host_sev_id}' aria-label='Severidade do host'></canvas></div>"
+        charts_html += f"<div class=\"chart-card\"><canvas id='{host_chart_id}' aria-label='Resumo do host (24h)'></canvas></div>"
+        charts_html += f"<div class=\"chart-card\"><canvas id='{host_sev_id}' aria-label='Severidade do host (24h)'></canvas></div>"
         if trend_id:
             charts_html += f"<div class=\"chart-card\"><canvas id='{trend_id}' aria-label='Tendência histórica do host'></canvas></div>"
         charts_html += "</div>"
@@ -142,15 +167,17 @@ def render_html_report(report: ReportModel) -> str:
             for item in host.history_detail:
                 ports_text = ", ".join(str(p) for p in item.get("ports", [])) if item.get("ports") else "—"
                 cves_text = ", ".join(html.escape(c) for c in item.get("cves", [])) if item.get("cves") else "—"
+                severity_text = format_severity_counts(item.get("severity", {})) or "—"
                 rows.append(
                     f"<div class='history-row'>"
                     f"<div class='history-period'>{html.escape(str(item.get('period') or ''))}</div>"
                     f"<div class='history-ports'><strong>Portas:</strong> {ports_text}</div>"
                     f"<div class='history-cves'><strong>CVEs:</strong> {cves_text}</div>"
+                    f"<div class='history-severity'><strong>Severidade:</strong> {html.escape(severity_text)}</div>"
                     f"</div>"
                 )
             history_html = (
-                "<div class=\"section-subtitle\">Histórico detalhado (portas e CVEs por mês)</div>"
+                "<div class=\"section-subtitle\">Histórico detalhado (últimos 3 anos)</div>"
                 "<div class=\"history-table\">"
                 + "".join(rows)
                 + "</div>"
@@ -170,7 +197,10 @@ def render_html_report(report: ReportModel) -> str:
         )
 
     charts_payload = {
-        "summary": {"labels": ["Hosts", "Portas", "CVEs"], "values": [total_hosts, total_ports, total_vulns]},
+        "summary": {
+            "labels": ["Hosts", "Portas", "CVEs (24h)"],
+            "values": [total_hosts, total_ports, total_vulns_24h],
+        },
         "globalSeverity": {
             "labels": severity_labels_pt,
             "values": [severity_global.get(key, 0) for key in severity_keys],
@@ -247,6 +277,16 @@ def render_html_report(report: ReportModel) -> str:
       border-bottom: 1px solid var(--border);
     }}
     .section-subtitle {{ font-weight: 700; margin: 18px 0 8px; }}
+    .context {{
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: var(--shadow);
+      margin: 20px 0;
+    }}
+    .context-title {{ font-size: 18px; font-weight: 700; margin: 0 0 10px; }}
+    .context p {{ margin: 0 0 10px; color: var(--muted); }}
     .chart-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 12px 0; }}
     .chart-card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px; }}
     .chart-card canvas {{ width: 100% !important; height: 240px !important; display: block; }}
@@ -272,9 +312,9 @@ def render_html_report(report: ReportModel) -> str:
     .vuln-entry {{ background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 13px; }}
     .muted {{ color: var(--muted); }}
     .history-table {{ display: grid; gap: 8px; margin-top: 12px; }}
-    .history-row {{ display: grid; grid-template-columns: 1fr 2fr 2fr; gap: 8px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }}
+    .history-row {{ display: grid; grid-template-columns: 1fr 2fr 2fr 2fr; gap: 8px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }}
     .history-period {{ font-weight: 700; }}
-    .history-ports, .history-cves {{ font-size: 13px; }}
+    .history-ports, .history-cves, .history-severity {{ font-size: 13px; }}
     @media (max-width: 768px) {{
       .history-row {{ grid-template-columns: 1fr; }}
     }}
@@ -296,15 +336,23 @@ def render_html_report(report: ReportModel) -> str:
       </div>
     </header>
 
+    <section class="context">
+      <div class="context-title">Contexto</div>
+      <p>Apresentamos este relatorio com uma analise da superficie de ataque da organizacao, identificando vulnerabilidades ciberneticas que podem ser exploradas por agentes maliciosos. O objetivo e avaliar riscos, priorizar correcoes e fortalecer a postura de seguranca.</p>
+      <p>A superficie de ataque e o conjunto de todos os pontos de entrada potenciais que um invasor pode utilizar para comprometer sistemas, redes e aplicacoes.</p>
+      <p>O objetivo deste relatorio e mapear e avaliar vulnerabilidades identificadas em ativos internos e externos, incluindo servidores, endpoints, APIs e recursos em nuvem. O escopo da analise inclui ativos corporativos expostos a internet e infraestruturas criticas internas.</p>
+    </section>
+
     <section>
       <div class="cards">
         <div class="card"><div class="card-title">Hosts encontrados</div><div class="card-value">{total_hosts}</div></div>
         <div class="card"><div class="card-title">Portas únicas</div><div class="card-value">{total_ports}</div></div>
-        <div class="card"><div class="card-title">Total de CVEs</div><div class="card-value">{total_vulns}</div></div>
+        <div class="card"><div class="card-title">CVEs (24h)</div><div class="card-value">{total_vulns_24h}</div></div>
       </div>
+      <p class="hero-sub">Modo histórico: {"Ativado" if report.summary.history_enabled else "Desativado"}</p>
       <div class='chart-grid'>
         <div class="chart-card"><canvas id="chart-summary" aria-label="Resumo do escopo"></canvas></div>
-        <div class="chart-card"><canvas id="chart-severity-global" aria-label="Severidade global"></canvas></div>
+        <div class="chart-card"><canvas id="chart-severity-global" aria-label="Severidade (24h)"></canvas></div>
       </div>
     </section>
     {''.join(host_sections)}

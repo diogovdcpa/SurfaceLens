@@ -124,11 +124,11 @@ def create_bar_chart(
 
 
 def create_summary_chart(report: ReportModel, chart_paths: List[str]) -> str | None:
-    labels = ["Hosts", "Portas", "CVEs"]
+    labels = ["Hosts", "Portas", "CVEs (24h)"]
     values = [
         report.summary.total_hosts,
         report.summary.total_ports,
-        report.summary.total_vulns,
+        report.summary.total_vulns_24h,
     ]
     return create_bar_chart(labels, values, "Resumo do escopo", chart_paths)
 
@@ -139,7 +139,7 @@ def create_global_severity_chart(report: ReportModel, chart_paths: List[str]) ->
     import numpy as np
 
     severity_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
-    severity_counts = report.summary.severity_global
+    severity_counts = report.summary.severity_24h
 
     labels = ["Crítico", "Alto", "Médio", "Baixo"]
     values = [severity_counts.get(key, 0) for key in severity_order]
@@ -167,7 +167,7 @@ def create_global_severity_chart(report: ReportModel, chart_paths: List[str]) ->
                 weight="bold",
             )
     ax.legend(wedges, labels, loc="lower center", bbox_to_anchor=(0.5, -0.18), ncol=4, fontsize=7)
-    ax.set_title("Severidade total", fontsize=9, color="#1c2031")
+    ax.set_title("Severidade (24h)", fontsize=9, color="#1c2031")
     fig.tight_layout()
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     fig.savefig(tmp.name, dpi=220, bbox_inches="tight", transparent=True)
@@ -177,8 +177,8 @@ def create_global_severity_chart(report: ReportModel, chart_paths: List[str]) ->
 
 
 def create_host_chart(host: ReportHost, chart_paths: List[str]) -> str | None:
-    labels = ["Portas", "CVEs"]
-    values = [host.unique_ports, len(host.all_vulns)]
+    labels = ["Portas", "CVEs (24h)"]
+    values = [host.unique_ports, len(host.recent_vulns)]
     return create_bar_chart(labels, values, f"Host {host.host.ip}", chart_paths)
 
 
@@ -188,7 +188,7 @@ def create_vuln_severity_chart(host: ReportHost, chart_paths: List[str]) -> str 
     import numpy as np
 
     severity_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
-    severity_counts = host.severity_counts
+    severity_counts = host.recent_severity_counts
     labels = ["Crítico", "Alto", "Médio", "Baixo"]
     values = [severity_counts.get(key, 0) for key in severity_order]
     colors = [rgb_to_hex(ReportPDF.SEVERITY_COLORS[key]) for key in severity_order]
@@ -214,7 +214,7 @@ def create_vuln_severity_chart(host: ReportHost, chart_paths: List[str]) -> str 
                 weight="bold",
             )
     ax.legend(wedges, labels, loc="lower center", bbox_to_anchor=(0.5, -0.2), ncol=3, fontsize=7)
-    ax.set_title("Severidade de CVEs", fontsize=9, color="#1c2031")
+    ax.set_title("Severidade (24h)", fontsize=9, color="#1c2031")
     fig.tight_layout()
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     fig.savefig(tmp.name, dpi=220, bbox_inches="tight", transparent=True)
@@ -228,6 +228,26 @@ def render_pdf_bytes(report: ReportModel) -> bytes:
     pdf = ReportPDF(brand_title=f"{brand_name} surface vulnerability report")
     chart_paths: List[str] = []
     generated_at = report.generated_at.strftime("%d/%m/%Y %H:%M UTC")
+    severity_labels = [
+        ("Crítico", "CRITICAL"),
+        ("Alto", "HIGH"),
+        ("Médio", "MEDIUM"),
+        ("Baixo", "LOW"),
+        ("Info", "INFO"),
+    ]
+
+    def format_severity_counts(counts: dict[str, int]) -> str | None:
+        parts = []
+        for label, key in severity_labels:
+            value = counts.get(key, 0)
+            if value:
+                parts.append(f"{label}: {value}")
+        return " | ".join(parts) if parts else None
+
+    def format_recent_cves(recent) -> str | None:
+        if not recent:
+            return None
+        return ", ".join(vuln.cve for vuln in recent)
 
     def render_cover_page() -> None:
         original_header = pdf.header_enabled
@@ -395,7 +415,11 @@ def render_pdf_bytes(report: ReportModel) -> bytes:
         if data.open_ports:
             details.append(("Portas abertas (agora)", ", ".join(str(p) for p in data.open_ports), None))
         if host.all_vulns:
-            details.append(("Vulnerabilidades (agora)", summarize_total_vulns(host.all_vulns), None))
+            details.append(("Vulnerabilidades (total)", summarize_total_vulns(host.all_vulns), None))
+        recent_cves = format_recent_cves(host.recent_vulns)
+        details.append(("CVEs (24h)", recent_cves or "Nenhuma nas últimas 24h", None))
+        severity_text = format_severity_counts(host.recent_severity_counts)
+        details.append(("Severidade (24h)", severity_text or "Sem dados nas últimas 24h", None))
         if not any(value for _, value, _ in details):
             details.append(("Informações", "Nenhum metadado divulgado pelo Shodan.", None))
 
@@ -427,6 +451,29 @@ def render_pdf_bytes(report: ReportModel) -> bytes:
             for service in data.services:
                 write_service_details(service)
         pdf.ln(2)
+        if data.history_detail:
+            pdf.section_title("Histórico (últimos 3 anos)", content_width)
+            for item in data.history_detail:
+                period = item.get("period") or "-"
+                ports = item.get("ports") or []
+                cves = item.get("cves") or []
+                severity = item.get("severity") or {}
+                ports_text = ", ".join(str(p) for p in ports) if ports else "-"
+                cves_text = ", ".join(str(c) for c in cves) if cves else "-"
+                severity_text = format_severity_counts(severity) or "-"
+                pdf.set_fill_color(*pdf.CARD_BG)
+                pdf.set_text_color(*pdf.TEXT_PRIMARY)
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.set_x(pdf.l_margin)
+                pdf.multi_cell(content_width, 6, f"Período {period}", fill=True)
+                pdf.set_font("Helvetica", size=9)
+                pdf.set_x(pdf.l_margin)
+                pdf.multi_cell(content_width, 5, f"Portas: {ports_text}")
+                pdf.set_x(pdf.l_margin)
+                pdf.multi_cell(content_width, 5, f"CVEs: {cves_text}")
+                pdf.set_x(pdf.l_margin)
+                pdf.multi_cell(content_width, 5, f"Severidade: {severity_text}")
+                pdf.ln(2)
 
     render_cover_page()
     render_context_page()
@@ -442,6 +489,13 @@ def render_pdf_bytes(report: ReportModel) -> bytes:
         ("Alvo solicitado", report.target, None),
         ("Data de geração", generated_at, None),
         ("Hosts encontrados", str(report.summary.total_hosts), None),
+        ("Portas abertas (escopo)", str(report.summary.total_ports), None),
+        ("CVEs (24h)", str(report.summary.total_vulns_24h), None),
+        (
+            "Severidade (24h)",
+            format_severity_counts(report.summary.severity_24h) or "Sem dados nas últimas 24h",
+            None,
+        ),
         ("Modo histórico", "Ativado" if report.summary.history_enabled else "Desativado", None),
     ]
     write_info_block(summary_items, multiline=False)

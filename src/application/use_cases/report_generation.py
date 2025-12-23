@@ -13,6 +13,7 @@ from application.report_utils import (
     is_ip,
     severity_counts_for_host,
     severity_counts_global,
+    severity_counts_for_vulns,
 )
 from domain.entity import HostReport, ReportWarning
 from domain.errors import (
@@ -163,20 +164,31 @@ def build_report_model(
     host_models: List[ReportHost] = []
     for host in hosts:
         all_vulns = collect_all_vulns(host)
+        recent_vulns = host.recent_vulns or []
+        recent_severity = severity_counts_for_vulns(recent_vulns)
         host_models.append(
             ReportHost(
                 host=host,
                 all_vulns=all_vulns,
                 severity_counts=severity_counts_for_host(host),
                 unique_ports=len(set(host.open_ports)),
+                recent_vulns=recent_vulns,
+                recent_severity_counts=recent_severity,
             )
         )
+
+    severity_24h: dict[str, int] = {}
+    for host_item in host_models:
+        for key, value in host_item.recent_severity_counts.items():
+            severity_24h[key] = severity_24h.get(key, 0) + value
 
     summary = ReportSummary(
         total_hosts=len(host_models),
         total_ports=sum(item.unique_ports for item in host_models),
         total_vulns=sum(len(item.all_vulns) for item in host_models),
         severity_global=severity_counts_global(hosts),
+        total_vulns_24h=sum(len(item.recent_vulns) for item in host_models),
+        severity_24h=severity_24h,
         history_enabled=any(item.host.history_detail for item in host_models),
     )
 

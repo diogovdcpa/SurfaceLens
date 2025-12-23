@@ -73,6 +73,10 @@ class ReportGenerationTests(unittest.TestCase):
                     info=None,
                 )
             ],
+            recent_vulns=[
+                VulnerabilityDetail(cve="CVE-2024-0001", cvss=9.0),
+                VulnerabilityDetail(cve="CVE-2023-0002", cvss=5.0),
+            ],
             history_trend=None,
             history_detail=None,
         )
@@ -85,6 +89,9 @@ class ReportGenerationTests(unittest.TestCase):
         self.assertEqual(report.hosts[0].unique_ports, 2)
         self.assertEqual(report.hosts[0].severity_counts.get("CRITICAL"), 2)
         self.assertEqual(report.summary.severity_global.get("CRITICAL"), 2)
+        self.assertEqual(report.summary.total_vulns_24h, 2)
+        self.assertEqual(report.summary.severity_24h.get("CRITICAL"), 1)
+        self.assertEqual(report.summary.severity_24h.get("MEDIUM"), 1)
 
 
 if __name__ == "__main__":

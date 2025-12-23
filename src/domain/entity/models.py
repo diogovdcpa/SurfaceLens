@@ -36,6 +36,7 @@ class HostReport:
     tags: List[str]
     vulns: List[VulnerabilityDetail]
     services: List[ServiceInfo]
+    recent_vulns: List[VulnerabilityDetail] = field(default_factory=list)
     history_trend: dict[str, list[int]] | None = None
     history_detail: list[dict[str, object]] | None = None
 

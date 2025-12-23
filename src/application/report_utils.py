@@ -128,6 +128,15 @@ def severity_counts_for_host(host: HostReport) -> Dict[str, int]:
     return counts
 
 
+def severity_counts_for_vulns(vulns: List[VulnerabilityDetail]) -> Dict[str, int]:
+    counts: Dict[str, int] = {key: 0 for key in SEVERITY_ORDER}
+    for vuln in vulns:
+        sev = severity_from_cvss(cvss_score(vuln.cvss))
+        counts.setdefault(sev, 0)
+        counts[sev] += 1
+    return counts
+
+
 def severity_counts_global(hosts: List[HostReport]) -> Dict[str, int]:
     counts: Dict[str, int] = {key: 0 for key in SEVERITY_ORDER}
     for host in hosts:
