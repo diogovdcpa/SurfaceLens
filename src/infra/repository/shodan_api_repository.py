@@ -165,19 +165,19 @@ def build_history_trend(entries: list[dict]) -> dict[str, list[int]] | None:
 
 def build_history_detail(entries: list[dict]) -> list[dict[str, object]] | None:
     """
-    Retorna uma lista ordenada por mês com portas e CVEs observados naquele snapshot.
+    Retorna uma lista ordenada por dia com portas e CVEs observados naquele snapshot.
     """
-    buckets: dict[str, dict[str, object]] = {}
+    buckets: dict[datetime.date, dict[str, object]] = {}
     cutoff = datetime.now(timezone.utc) - timedelta(days=365 * HISTORY_YEARS)
     for entry in entries or []:
         timestamp = parse_timestamp(entry.get("timestamp"))
         if not timestamp or not within_history_window(timestamp, cutoff):
             continue
-        month = timestamp.strftime("%Y-%m")
+        period_date = timestamp.date()
         bucket = buckets.setdefault(
-            month,
+            period_date,
             {
-                "period": month,
+                "period": period_date,
                 "ports": set(),
                 "cves": set(),
                 "severity": {level: 0 for level in SEVERITY_ORDER},
@@ -193,11 +193,11 @@ def build_history_detail(entries: list[dict]) -> list[dict[str, object]] | None:
     if not buckets:
         return None
     ordered = []
-    for period in sorted(buckets.keys(), reverse=True):
-        data = buckets[period]
+    for period_date in sorted(buckets.keys(), reverse=True):
+        data = buckets[period_date]
         ordered.append(
             {
-                "period": period,
+                "period": period_date.strftime("%d/%m/%Y"),
                 "ports": sorted(data["ports"]),
                 "cves": sorted(data["cves"]),
                 "severity": data.get("severity", {}),
