@@ -299,22 +299,22 @@ def render_html_report(report: ReportModel) -> str:
       margin-top: 20px;
     }}
     .info-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }}
-    .info-row {{ background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }}
+    .info-row {{ background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 10px; padding: 10px; min-width: 0; }}
     .info-label {{ display: block; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }}
-    .info-value {{ font-size: 14px; font-weight: 600; }}
+    .info-value {{ font-size: 14px; font-weight: 600; overflow-wrap: anywhere; word-break: break-word; }}
     .services-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }}
-    .service-card {{ background: #0f172a; border: 1px solid var(--border); border-radius: 12px; padding: 10px; }}
-    .service-header {{ font-weight: 700; margin-bottom: 6px; }}
-    .service-meta {{ font-size: 13px; color: var(--muted); margin-bottom: 6px; }}
+    .service-card {{ background: #0f172a; border: 1px solid var(--border); border-radius: 12px; padding: 10px; min-width: 0; }}
+    .service-header {{ font-weight: 700; margin-bottom: 6px; overflow-wrap: anywhere; word-break: break-word; }}
+    .service-meta {{ font-size: 13px; color: var(--muted); margin-bottom: 6px; overflow-wrap: anywhere; word-break: break-word; }}
     .vuln-list {{ display: grid; gap: 6px; }}
     .vuln-year {{ font-weight: 700; margin-top: 6px; }}
     .vuln-severity {{ margin: 2px 0; }}
-    .vuln-entry {{ background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 13px; }}
+    .vuln-entry {{ background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 13px; overflow-wrap: anywhere; word-break: break-word; }}
     .muted {{ color: var(--muted); }}
     .history-table {{ display: grid; gap: 8px; margin-top: 12px; }}
-    .history-row {{ display: grid; grid-template-columns: 1fr 2fr 2fr 2fr; gap: 8px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }}
+    .history-row {{ display: grid; grid-template-columns: 1fr 2fr 2fr 2fr; gap: 8px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 10px; padding: 8px; min-width: 0; }}
     .history-period {{ font-weight: 700; }}
-    .history-ports, .history-cves, .history-severity {{ font-size: 13px; }}
+    .history-ports, .history-cves, .history-severity {{ font-size: 13px; overflow-wrap: anywhere; word-break: break-word; }}
     @media (max-width: 768px) {{
       .history-row {{ grid-template-columns: 1fr; }}
     }}
