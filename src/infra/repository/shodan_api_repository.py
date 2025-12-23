@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-import requests
 from datetime import datetime, timezone
 
+import requests
+
 from domain.entity import HostReport, ServiceInfo, VulnerabilityDetail
+from domain.errors import (
+    ShodanHTTPError,
+    ShodanNetworkError,
+    ShodanNotFoundError,
+    ShodanRateLimitError,
+    ShodanTimeoutError,
+)
 from domain.repository import ShodanRepository
 
 API_BASE_URL = "https://api.shodan.io"
@@ -177,17 +185,30 @@ class ShodanAPIRepository(ShodanRepository):
         merged_params = {"key": self.api_key}
         if params:
             merged_params.update(params)
-        response = requests.get(url, params=merged_params, timeout=timeout)
+        try:
+            response = requests.get(url, params=merged_params, timeout=timeout)
+        except requests.Timeout as exc:
+            raise ShodanTimeoutError() from exc
+        except requests.RequestException as exc:
+            raise ShodanNetworkError(str(exc)) from exc
         if response.status_code == 404:
-            raise ValueError("Alvo não encontrado no Shodan")
-        response.raise_for_status()
-        return response.json()
+            raise ShodanNotFoundError("Alvo não encontrado no Shodan")
+        if response.status_code == 429:
+            raise ShodanRateLimitError(status_code=429)
+        if not response.ok:
+            raise ShodanHTTPError(status_code=response.status_code)
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise ShodanHTTPError(message="Resposta inválida do Shodan") from exc
 
     def fetch_domain_history(self, domain: str, timeout: int) -> tuple[list[str], str | None]:
         url = f"{API_BASE_URL}/dns/domain/{domain}"
         params = {"key": self.api_key, "history": "true"}
         try:
             response = requests.get(url, params=params, timeout=timeout)
+        except requests.Timeout as exc:
+            return [], f"tempo limite: {exc}"
         except requests.RequestException as exc:
             return [], f"falha de rede: {exc}"
 

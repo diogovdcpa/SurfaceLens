@@ -6,7 +6,7 @@ from typing import Any
 
 from flask import flash
 
-from application.use_cases.report_generation import DEFAULT_TIMEOUT, warning_message_text
+from application.report_utils import warning_message_text
 
 MAX_FLASH_WARNINGS = 3
 
@@ -55,12 +55,3 @@ def flash_warnings(warnings) -> None:
             "warning",
         )
 
-
-def parse_timeout(raw: str | None) -> int:
-    if not raw:
-        return DEFAULT_TIMEOUT
-    try:
-        value = int(raw)
-        return value if value > 0 else DEFAULT_TIMEOUT
-    except ValueError:
-        return DEFAULT_TIMEOUT

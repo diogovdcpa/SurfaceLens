@@ -14,17 +14,17 @@ from flask import (
     url_for,
 )
 
+from application.report_utils import default_output_name
 from application.use_cases.report_generation import (
     DEFAULT_TIMEOUT,
+    build_report_model,
     collect_host_reports,
-    default_output_name,
     load_api_key,
     normalize_targets,
-    render_html_report,
-    render_pdf_bytes,
 )
 from domain.repository import ShodanRepository
 from infra.controllers.web_controller import flash_warnings, get_reports
+from infra.presenters import render_html_report, render_pdf_bytes
 from infra.repository.shodan_api_repository import ShodanAPIRepository
 
 
@@ -101,8 +101,9 @@ def build_web_blueprint(
             return redirect(url_for("web.index"))
 
         target_label = ", ".join(targets)
-        pdf_bytes = render_pdf_bytes(target_label, aggregated_reports, company=company)
-        html_content = render_html_report(target_label, aggregated_reports, company=company)
+        report_model = build_report_model(target_label, aggregated_reports, company=company)
+        pdf_bytes = render_pdf_bytes(report_model)
+        html_content = render_html_report(report_model)
         pdf_filename = default_output_name(targets)
         base_name = pdf_filename.rsplit(".", 1)[0]
         html_filename = f"{base_name}.html"
