@@ -215,6 +215,16 @@ def warning_message_text(warning: ReportWarning, verbose: bool = False) -> str:
         base = (
             f"{warning.ip}: não foi possível recuperar os IPs históricos do domínio via Shodan."
         )
+    elif warning.kind == "dns_local_failed":
+        base = f"{warning.ip}: falha ao resolver DNS local; tentando Shodan."
+    elif warning.kind == "dns_shodan_failed":
+        base = f"{warning.ip}: falha ao resolver DNS via Shodan."
+    elif warning.kind == "host_search_failed":
+        base = f"{warning.ip}: falha ao buscar hosts no Shodan."
+    elif warning.kind == "no_shodan_data":
+        base = "Nenhum dado encontrado no Shodan para os IPs resolvidos."
+    elif warning.kind == "max_ips":
+        base = "Limite de IPs atingido (MAX_TARGET_IPS); resultados podem ser parciais."
     else:
         base = f"{warning.ip}: {warning.kind}."
 

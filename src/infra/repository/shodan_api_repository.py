@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import ipaddress
 
 import requests
 
@@ -261,12 +262,29 @@ class ShodanAPIRepository(ShodanRepository):
     def fetch_domain_history(self, domain: str, timeout: int) -> tuple[list[str], str | None]:
         url = f"{API_BASE_URL}/dns/domain/{domain}"
         params = {"key": self.api_key, "history": "true"}
-        try:
-            response = requests.get(url, params=params, timeout=timeout)
-        except requests.Timeout as exc:
-            return [], f"tempo limite: {exc}"
-        except requests.RequestException as exc:
-            return [], f"falha de rede: {exc}"
+
+        def do_request(request_params: dict) -> tuple[requests.Response | None, str | None]:
+            try:
+                return requests.get(url, params=request_params, timeout=timeout), None
+            except requests.Timeout as exc:
+                return None, f"tempo limite: {exc}"
+            except requests.RequestException as exc:
+                return None, f"falha de rede: {exc}"
+
+        response, error = do_request(params)
+        if error:
+            return [], error
+
+        if response is None:
+            return [], "resposta inválida do Shodan"
+
+        if response.status_code == 400:
+            # Alguns ambientes não aceitam o parametro history em /dns/domain.
+            response, error = do_request({"key": self.api_key})
+            if error:
+                return [], error
+            if response is None:
+                return [], "resposta inválida do Shodan"
 
         if response.status_code == 404:
             # Sem dados históricos para o domínio: não é um erro
@@ -284,16 +302,104 @@ class ShodanAPIRepository(ShodanRepository):
         for record in payload.get("data", []):
             record_type = (record.get("type") or "").upper()
             value = record.get("value")
-            if record_type != "A" or not value:
+            if record_type not in ("A", "AAAA") or not value:
                 continue
-            ips.append(str(value))
+            candidate = str(value)
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                continue
+            ips.append(candidate)
+        return ips, None
+
+    def fetch_dns_resolve(self, domain: str, timeout: int) -> tuple[list[str], str | None]:
+        url = f"{API_BASE_URL}/dns/resolve"
+        params = {"key": self.api_key, "hostnames": domain}
+        try:
+            response = requests.get(url, params=params, timeout=timeout)
+        except requests.Timeout as exc:
+            return [], f"tempo limite: {exc}"
+        except requests.RequestException as exc:
+            return [], f"falha de rede: {exc}"
+
+        if not response.ok:
+            return [], f"HTTP {response.status_code}"
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            return [], f"resposta inválida do Shodan: {exc}"
+
+        ips: list[str] = []
+        values = payload.values() if isinstance(payload, dict) else [payload]
+        for value in values:
+            candidates = value if isinstance(value, list) else [value]
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                candidate_str = str(candidate)
+                try:
+                    ipaddress.ip_address(candidate_str)
+                except ValueError:
+                    continue
+                if candidate_str not in ips:
+                    ips.append(candidate_str)
+        return ips, None
+
+    def fetch_host_search(
+        self,
+        domain: str,
+        timeout: int,
+        limit: int | None = None,
+    ) -> tuple[list[str], str | None]:
+        url = f"{API_BASE_URL}/shodan/host/search"
+        params = {"key": self.api_key, "query": f"hostname:{domain}"}
+        try:
+            response = requests.get(url, params=params, timeout=timeout)
+        except requests.Timeout as exc:
+            return [], f"tempo limite: {exc}"
+        except requests.RequestException as exc:
+            return [], f"falha de rede: {exc}"
+
+        if not response.ok:
+            return [], f"HTTP {response.status_code}"
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            return [], f"resposta inválida do Shodan: {exc}"
+
+        ips: list[str] = []
+        matches = payload.get("matches", []) if isinstance(payload, dict) else []
+        for match in matches:
+            ip_value = match.get("ip_str") or match.get("ip")
+            if not ip_value:
+                continue
+            candidate = str(ip_value)
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                continue
+            if candidate not in ips:
+                ips.append(candidate)
+            if limit and len(ips) >= limit:
+                break
         return ips, None
 
     def fetch_host_report(self, ip: str, timeout: int, include_history: bool = False) -> HostReport:
         params = {"history": "true"} if include_history else None
-        payload = self.shodan_request(f"/shodan/host/{ip}", timeout, params=params)
+        effective_history = include_history
+        try:
+            payload = self.shodan_request(f"/shodan/host/{ip}", timeout, params=params)
+        except ShodanNotFoundError:
+            if not include_history:
+                raise
+            # Fallback sem history quando o parâmetro não é aceito.
+            effective_history = False
+            payload = self.shodan_request(f"/shodan/host/{ip}", timeout, params=None)
+
         entries = payload.get("data", []) or []
-        service_entries = select_latest_services(entries) if include_history else entries
+        service_entries = select_latest_services(entries) if effective_history else entries
         services: list[ServiceInfo] = []
         for entry in service_entries:
             service = ServiceInfo(
@@ -330,8 +436,8 @@ class ShodanAPIRepository(ShodanRepository):
             vulns=extract_vulns(payload.get("vulns")),
             services=services,
             recent_vulns=recent_vulns,
-            history_trend=build_history_trend(payload.get("data", [])) if include_history else None,
-            history_detail=build_history_detail(payload.get("data", [])) if include_history else None,
+            history_trend=build_history_trend(payload.get("data", [])) if effective_history else None,
+            history_detail=build_history_detail(payload.get("data", [])) if effective_history else None,
         )
 
         return host_report
