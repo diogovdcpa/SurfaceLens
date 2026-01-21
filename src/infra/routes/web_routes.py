@@ -14,7 +14,7 @@ from flask import (
     url_for,
 )
 
-from application.report_utils import default_output_name
+from application.report_utils import default_output_name, warning_message_text
 from application.use_cases.report_generation import (
     DEFAULT_TIMEOUT,
     build_report_model,
@@ -94,11 +94,22 @@ def build_web_blueprint(
             flash("Não foi possível gerar o relatório. Tente novamente em instantes.", "error")
             return redirect(url_for("web.index"))
 
-        flash_warnings(aggregated_warnings)
-
         if not aggregated_reports:
-            flash("Nenhum host com dados disponíveis para gerar o relatório.", "error")
+            no_data_warning = next(
+                (warning for warning in aggregated_warnings if warning.kind == "no_shodan_data"),
+                None,
+            )
+            filtered_warnings = [
+                warning for warning in aggregated_warnings if warning.kind != "no_shodan_data"
+            ]
+            flash_warnings(filtered_warnings)
+            if no_data_warning:
+                flash(warning_message_text(no_data_warning), "error")
+            else:
+                flash("Nenhum host com dados disponíveis para gerar o relatório.", "error")
             return redirect(url_for("web.index"))
+
+        flash_warnings(aggregated_warnings)
 
         target_label = ", ".join(targets)
         report_model = build_report_model(target_label, aggregated_reports, company=company)
